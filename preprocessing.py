@@ -1,9 +1,9 @@
 # Identifying event states in two-person fNIRS data using Riemannian-geometry based k-Means
 
-#**Author:** Luca A. Naudszus  
-#**Date:** January 11, 2025
-#**Affiliation:** Social Brain Sciences, ETH Zürich  
-#**Email:** luca.naudszus@gess.ethz.ch  
+#**Author:** Luca A. Naudszus
+#**Date:** January 17, 2025
+#**Affiliation:** Social Brain Sciences, ETH Zürich
+#**Email:** luca.naudszus@gess.ethz.ch
 
 ## Preparations
 
@@ -16,11 +16,11 @@ import pandas as pd
 import scipy as sp
 import mne
 
-path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data/"
+path = "./data/"
 inpath = str(path + "/sourcedata/")
 
 ### custom functions
-def reshape(ts, upsampling_freq, window_length): 
+def reshape(ts, upsampling_freq, window_length):
     trim_size = ts.shape[1] % (upsampling_freq*window_length)
     ts_trimmed = ts[:, :-trim_size] if trim_size != 0 else ts
     ts_reshaped = ts_trimmed.reshape(-1, ts.shape[0], (upsampling_freq*window_length))
@@ -52,7 +52,7 @@ for file in os.listdir(inpath):
         if re.match(r".*_[0-9]\.snirf$", file):
             error_log.append((file[:-8], 'interrupted recording'))
             continue
-        
+
         # get path and info
         nirs_path = str(inpath + file)
         pID = int(file[4:7])
@@ -61,7 +61,7 @@ for file in os.listdir(inpath):
         new_name = file[:-6] + "_pre"
 
         # extract best channels
-        best_chs = BESTchannels.loc[(BESTchannels['ID'] == pID) & 
+        best_chs = BESTchannels.loc[(BESTchannels['ID'] == pID) &
                                     (BESTchannels['session'] == session_n)]
         # preprocess data
         raw = mne.io.read_raw_snirf(nirs_path)
@@ -76,17 +76,17 @@ for file in os.listdir(inpath):
         chs850 = list(best_chs['channel'] + " 850")
         chs760 = list(best_chs['channel'] + " 760")
         keep_chs = chs850 + chs760
-        if len(keep_chs) != len(set(keep_chs)): 
+        if len(keep_chs) != len(set(keep_chs)):
             error_log.append((file[:-6], 'duplicate best channels'))
             continue
-        if len(keep_chs) == 0: 
+        if len(keep_chs) == 0:
             error_log.append((file[:-6], 'no information on best channels'))
             continue
         raw_od_good_chs = raw_od.pick(keep_chs)
 
         # convert to haemoglobin
         raw_haemo = mne.preprocessing.nirs.beer_lambert_law(raw_od_good_chs, ppf = 6.0)
-        
+
         # check whether there are enough onsets recorded
         if len(raw_haemo.annotations) < 4:
             error_log.append((file[:-6], 'no onsets'))
@@ -99,35 +99,35 @@ for file in os.listdir(inpath):
                 in_activity + 1] - raw_haemo.annotations.onset[in_activity], 3)
             raw_haemo.annotations.duration[3] = round(raw_haemo[
             raw_haemo.ch_names[0]][1].max() - raw_haemo.annotations.onset[3], 3)
-        # TO-DO: how do we handle too short durations? 
+        # TO-DO: how do we handle too short durations?
         # Especially: 103-1, less than 300 s for no visible reason
 
         # epoch data
         epoch_list = []
         for annot in raw_haemo.annotations:
-            epoch = mne.Epochs(raw_haemo, 
+            epoch = mne.Epochs(raw_haemo,
                            mne.events_from_annotations(raw_haemo)[0][[0]],
                            tmin = 0,
                            tmax = annot['duration'],
-                           baseline = None, 
+                           baseline = None,
                            verbose = 'WARNING')
             epoch_list.append(epoch)
-        
+
         for epoch in epoch_list:
-            epoch.load_data(verbose = 'WARNING')
+            epoch.load_data()
             # upsample data
             epoch.resample(100, verbose = 'WARNING')
-            
+
             # zero-phase 3rd order Butterworth filters to remove 0.03 - 0.1 Hz
             epoch.filter(0.02, 0.2, method='iir', iir_params=dict(order=3, ftype='butter'), verbose = 'WARNING')  # Keeps 0.02-0.2 Hz
             epoch.filter(0.03, 0.1, method='iir', iir_params=dict(order=3, ftype='butter', btype='bandstop'), verbose = 'WARNING')  # Removes 0.03-0.1 Hz
-        
+
         # write into dictionary
         keyname = file[:-6]
         all_dict[keyname] = epoch_list
 
 # align onsets
-# To this end, we move outside the snirf structure and work only on the timeseries. 
+# To this end, we move outside the snirf structure and work only on the timeseries.
 key_list = list(all_dict.keys())
 data_dict = {}
 original_lengths = []
@@ -144,18 +144,17 @@ for key in key_list:
         partnerID = dyads.pID1[dyads.pID2 == targetID].iloc[0]
         dyadID = dyads.dyadID[dyads.pID2 == targetID].values
     partner_key = f'sub-{partnerID}_session-{session_n}'
-    
+
     if partner_key not in all_dict:
         error_log.append((f'sub-{targetID}_session-{session_n}', 'partner data missing'))
         continue
-    
+
     partner = all_dict[partner_key]
-    
     target_list = []
     partner_list = []
     duration_list = []
     true_duration_list = []
-    
+
     # process each epoch
     for in_epoch in range(0, len(target)):
         target_interp = []
@@ -166,13 +165,13 @@ for key in key_list:
         partner_ts = partner_epoch.get_data(copy = False)[0]
         original_lengths.append(
             [targetID, partnerID, session_n, in_epoch, np.shape(target_ts)[1], np.shape(partner_ts)[1]])
-        # Find out which duration is longer, this will be the duration at which we aim. 
+        # Find out which duration is longer, this will be the duration at which we aim.
 
         if np.shape(target_ts)[1] > np.shape(partner_ts)[1]:
             # interpolate partner timeseries to length of target time series
             x_axis = np.arange(np.shape(partner_ts)[1])
             partner_interp = np.copy(target_ts)
-            for in_channel in range(0, 8): 
+            for in_channel in range(0, 8):
                 partner_interp[in_channel] = sp.interpolate.CubicSpline(x_axis, partner_ts[in_channel])(np.linspace(x_axis.min(), x_axis.max(), np.shape(target_ts)[1]))
             # keep target timeseries
             target_interp = np.copy(target_ts)
@@ -188,11 +187,11 @@ for key in key_list:
             partner_interp = np.copy(partner_ts)
             # write duration into list
             duration_list.append(np.shape(partner_interp)[1]/upsampling_freq)
-        else: 
+        else:
             target_interp = np.copy(target_ts)
             partner_interp = np.copy(partner_ts)
             duration_list.append(np.shape(target_interp)[1] / upsampling_freq)
-            
+
         assert np.shape(target_interp)[1] == np.shape(partner_interp)[1], "Interpolation has not properly worked"
 
         # Compare the interpolated duration with the true duration
@@ -205,22 +204,22 @@ for key in key_list:
                 next_start_time = datetime.combine(datetime(1, 1, 1), next_start.iloc[0])
                 true_duration = int((next_start_time - current_start_time).total_seconds())
                 task_duration = filtered_cutpoints.Length[filtered_cutpoints.Task == in_epoch + 1]
-                task_duration_secs = (datetime.combine(datetime.min, task_duration.iloc[0]) - datetime.min).total_seconds() 
-            else: 
+                task_duration_secs = (datetime.combine(datetime.min, task_duration.iloc[0]) - datetime.min).total_seconds()
+            else:
                 true_duration = np.nan
                 task_duration_secs = 300
-            
-            # Now we can dismiss the recording after the end of the activity. 
+
+            # Now we can dismiss the recording after the end of the activity.
             target_interp = target_interp[:,:round(task_duration_secs*upsampling_freq)]
             partner_interp = partner_interp[:,:round(task_duration_secs*upsampling_freq)]
-        else: 
+        else:
             true_duration = np.nan
         true_duration_list.append(true_duration)
-        durations.append([targetID, session_n, in_epoch, duration_list[in_epoch], true_duration])      
-        
+        durations.append([targetID, session_n, in_epoch, duration_list[in_epoch], true_duration])
+
         target_list.append(target_interp)
         partner_list.append(partner_interp)
-        
+
     # update dictionaries
     data_dict[key] = {
         'interpolation': target_list,
@@ -236,13 +235,13 @@ for key in key_list:
 df_lengths = pd.DataFrame(original_lengths)
 df_lengths.columns = ['target', 'partner', 'session', 'task', 'target_length', 'partner_length']
 df_lengths['ratio'] = df_lengths.target_length / df_lengths.partner_length
-df_lengths.ratio = np.where(df_lengths.ratio < 1, 1 / df_lengths.ratio, 
+df_lengths.ratio = np.where(df_lengths.ratio < 1, 1 / df_lengths.ratio,
                             df_lengths.ratio)
 
 df_durations = pd.DataFrame(durations)
 df_durations.columns = ['target', 'session', 'task', 'interpolated_duration', 'true_duration']
 df_durations['ratio'] = df_durations.interpolated_duration / df_durations.true_duration
-df_durations.ratio = np.where(df_durations.ratio < 1, 1 / df_durations.ratio, 
+df_durations.ratio = np.where(df_durations.ratio < 1, 1 / df_durations.ratio,
                             df_durations.ratio)
 
 ts_one_brain, ts_two_blocks, ts_four_blocks = [], [], []
@@ -296,12 +295,7 @@ doc_one_brain = pd.DataFrame(doc_one_brain)
 doc_two_blocks = pd.DataFrame(doc_two_blocks)
 doc_four_blocks = pd.DataFrame(doc_four_blocks)
 
-print(
-    f"Data preprocessed: {matrix_four_blocks.shape[0]} trials, {matrix_four_blocks.shape[1]} channels, "
-    f"{matrix_four_blocks.shape[2]} time points"
-)
-
-# save 
+# save
 doc_one_brain.to_csv(str(path + 'doc_one_brain.csv'))
 np.save(str(path + 'matrix_one_brain'), matrix_one_brain)
 doc_two_blocks.to_csv(str(path + 'doc_two_blocks.csv'))
