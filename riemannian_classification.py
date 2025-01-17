@@ -15,6 +15,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.utils.validation import check_is_fitted
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import GridSearchCV
 from pyriemann.classification import SVC
 from pyriemann.estimation import (
     BlockCovariances, 
@@ -334,7 +335,8 @@ plt.show()
 pipeline_hybrid_blocks = Pipeline(
     [
         ("block_kernels", HybridBlocks(block_size=block_size)),
-        ("classifier", SVC(metric="riemann", C=1)),
+#        ("classifier", SVC(metric="riemann", C=1)),
+        ("classifier", SVC(metric="riemann"))
     ]
 )
 
@@ -343,19 +345,20 @@ pipeline_blockcovariances = Pipeline(
     [
         ("covariances", BlockCovariances(block_size=block_size)),
         ('shrinkage', Shrinkage()),
-        ("classifier", SVC(metric="riemann", C=1)),
+#        ("classifier", SVC(metric="riemann", C=1)),
+        ("classifier", SVC(metric="riemann"))
     ]
 )
 
 # Define the hyperparameters for fitting
-pipeline_hybrid_blocks.set_params(
-    block_kernels__shrinkage=[0.02, 0.02], 
-    block_kernels__metrics= ['cov', 'rbf']
-    )
+#pipeline_hybrid_blocks.set_params(
+#    block_kernels__shrinkage=[0.02, 0.02], 
+#    block_kernels__metrics= ['cov', 'rbf']
+#    )
 
 pipeline_blockcovariances.set_params(
     covariances__estimator='lwf',
-    shrinkage__shrinkage=0.0001
+#   shrinkage__shrinkage=0.0001
     )
 
 # Define cross-validation
@@ -366,28 +369,62 @@ cv = StratifiedKFold(
     )
 
 ### Fit the two models
-cv_scores_hybrid_blocks = cross_val_score(
-    pipeline_hybrid_blocks, X, y,
-    cv=cv, scoring="accuracy", n_jobs=n_jobs
-    )
+#cv_scores_hybrid_blocks = cross_val_score(
+#    pipeline_hybrid_blocks, X, y,
+#    cv=cv, scoring="accuracy", n_jobs=n_jobs
+#    )
 
-cv_scores_blockcovariances = cross_val_score(
-    pipeline_blockcovariances, X, y,
-    cv=cv, scoring="accuracy", n_jobs=n_jobs)
+#cv_scores_blockcovariances = cross_val_score(
+#    pipeline_blockcovariances, X, y,
+#    cv=cv, scoring="accuracy", n_jobs=n_jobs)
 
 ### Print and plot results
-acc_hybrid_blocks = np.mean(cv_scores_hybrid_blocks)
-acc_blockcovariances = np.mean(cv_scores_blockcovariances)
+#acc_hybrid_blocks = np.mean(cv_scores_hybrid_blocks)
+#acc_blockcovariances = np.mean(cv_scores_blockcovariances)
 
-print(f"Mean accuracy for HybridBlocks: {acc_hybrid_blocks:.2f}")
-print(f"Mean accuracy for BlockCovariances: {acc_blockcovariances:.2f}")
+#print(f"Mean accuracy for HybridBlocks: {acc_hybrid_blocks:.2f}")
+#print(f"Mean accuracy for BlockCovariances: {acc_blockcovariances:.2f}")
 
 # plot a scatter plot of CV and median scores
-plt.figure(figsize=(6, 6))
-plt.scatter(cv_scores_hybrid_blocks, cv_scores_blockcovariances)
-plt.plot([0.4, 1], [0.4, 1], "--", color="black")
-plt.xlabel("Accuracy HybridBlocks")
-plt.ylabel("Accuracy BlockCovariances")
-plt.title("Comparison of HybridBlocks and Covariances")
-plt.legend(["CV Fold Scores"])
-plt.show()
+#plt.figure(figsize=(6, 6))
+#plt.scatter(cv_scores_hybrid_blocks, cv_scores_blockcovariances)
+#plt.plot([0.4, 1], [0.4, 1], "--", color="black")
+#plt.xlabel("Accuracy HybridBlocks")
+#plt.ylabel("Accuracy BlockCovariances")
+#plt.title("Comparison of HybridBlocks and Covariances")
+#plt.legend(["CV Fold Scores"])
+#plt.show()
+
+# Define grid search
+param_grid_hybrid_blocks = {
+    'block_kernels__shrinkage': [0.01, 0.1],
+    'block_kernels__metrics': ['cov', 'rbf'],
+    'classifier__C': [0.1, 1, 10],       # Regularization parameter
+}
+
+param_grid_blockcovariances = {
+    'classifier__C': [0.1, 1, 10],       # Regularization parameter
+    'shrinkage__shrinkage': [0.01, 0.1]
+}
+
+grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
+                           param_grid_hybrid_blocks, 
+                           cv=cv, 
+                           scoring='accuracy', 
+                           n_jobs=n_jobs)
+
+grid_search_blockcovariances = GridSearchCV(pipeline_blockcovariances, 
+                           param_grid_blockcovariances, 
+                           cv=cv, 
+                           scoring='accuracy', 
+                           n_jobs=n_jobs)
+
+# execute grid search
+grid_search_hybrid_blocks.fit(X, y)
+grid_search_blockcovariances.fit(X, y)
+
+# save results
+results_hybrid_blocks = pd.DataFrame(grid_search_hybrid_blocks.cv_results_)
+results_hybrid_blocks.to_csv("grid_search_hybrid_blocks_results.csv", index=False)
+results_blockcovariances = pd.DataFrame(grid_search_blockcovariances.cv_results_)
+results_blockcovariances.to_csv("grid_search_blockcovariances_results.csv", index=False)
