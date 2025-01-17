@@ -16,21 +16,29 @@ import pandas as pd
 import scipy as sp
 import mne
 
-inpath = "./sourcedata/" 
+path = "./data/"
+inpath = str(path + "/sourcedata/")
+
+### custom functions
+def reshape(ts, upsampling_freq, window_length): 
+    trim_size = ts.shape[1] % (upsampling_freq*window_length)
+    ts_trimmed = ts[:, :-trim_size] if trim_size != 0 else ts
+    ts_reshaped = ts_trimmed.reshape(-1, 16, (upsampling_freq*window_length))
+    return ts_reshaped
 
 ## Import data
 
 ### get list of true dyads
-dyads = pd.read_csv("dyadList.csv")
+dyads = pd.read_csv(str(path + "dyadList.csv"))
 
 ### get list of best channels per ROI
-BESTchannels = pd.read_csv("best_channels.csv")
+BESTchannels = pd.read_csv(str(path + "best_channels.csv"))
 BESTchannels.dropna(axis = 0, how = 'any', inplace = True)
 BESTchannels['session'] = BESTchannels['session'].astype(int)
 BESTchannels['ID'] = BESTchannels['ID'].astype(int)
 
 ### get list of activity durations (here extracted from video data)
-cutpoints = pd.read_excel("cutpoints_videos.xlsx")
+cutpoints = pd.read_excel(str(path + "cutpoints_videos.xlsx"))
 
 upsampling_freq = 100
 window_length = 10 # virtual trial length in s
@@ -236,39 +244,66 @@ df_durations['ratio'] = df_durations.interpolated_duration / df_durations.true_d
 df_durations.ratio = np.where(df_durations.ratio < 1, 1 / df_durations.ratio, 
                             df_durations.ratio)
 
+ts_one_brain, ts_two_blocks, ts_four_blocks = [], [], []
+doc_one_brain, doc_two_blocks, doc_four_blocks = [], [], []
+key_list = set(all_dict.keys())
 
-ts = []
-documentation = []
-key_list = list(all_dict.keys())
 for i, row in dyads.iterrows():
     for session in range(6):
-        target_key = 'sub-' + str(row['pID1']) + '_session-' + str(session + 1)
-        partner_key = 'sub-' + str(row['pID2']) + '_session-' + str(session + 1)
+        target_key = f"sub-{row['pID1']}_session-{session + 1}"
+        partner_key = f"sub-{row['pID2']}_session-{session + 1}"
+
         if target_key in key_list and partner_key in key_list:
-            target_list = data_dict[target_key]['interpolation']
-            partner_list = data_dict[partner_key]['interpolation']
+            target_list, partner_list = data_dict[target_key]['interpolation'], data_dict[partner_key]['interpolation']
+
             for activity in range(4):
-                target_ts = target_list[activity]
-                partner_ts = partner_list[activity]
-                if (activity != 3) and (partner_ts.shape[1] != 30000):
-                    print(f'dyad {row['dyadID']}, session {session}')
-                ts_concatenated = np.concatenate((target_ts[0:4,:], partner_ts[0:4,:], target_ts[4:8,:], partner_ts[4:8,:]), axis=0)
-                trim_size = ts_concatenated.shape[1] % (upsampling_freq*window_length)
-                ts_trimmed = ts_concatenated[:, :-trim_size] if trim_size != 0 else ts_concatenated
-                ts_reshaped = ts_trimmed.reshape(-1, 16, (upsampling_freq*window_length))
-                ts.append(ts_reshaped)
-                for j in range(0, ts_reshaped.shape[0]):
-                    documentation.append(
-                        [row['dyadID'], session, activity]
-                    )
-result = np.concatenate(ts, axis = 0)
-documentation = pd.DataFrame(documentation)
+                target_ts, partner_ts = target_list[activity], partner_list[activity]
+
+                # first, one-brain data
+                for ts, pID in zip([target_ts, partner_ts], [row['pID1'], row['pID2']]):
+                    ts_reshaped = reshape(ts, upsampling_freq, window_length)
+                    ts_one_brain.append(ts_reshaped)
+                    doc_one_brain.extend([[pID, session, activity]] * ts_reshaped.shape[0])
+
+                # second, two blocks: target + partner
+                ts_two_reshaped = reshape(np.concatenate((target_ts, partner_ts), axis=0), upsampling_freq, window_length)
+                ts_two_blocks.append(ts_two_reshaped)
+                doc_two_blocks.extend([[row['dyadID'], session, activity]] * ts_two_reshaped.shape[0])
+
+                # third, four blocks: target HbO, partner HbO, target HbR, partner HbR
+                ts_four_reshaped = reshape(np.concatenate((target_ts[:4], partner_ts[:4], target_ts[4:8], partner_ts[4:8]), axis=0), upsampling_freq, window_length)
+                ts_four_blocks.append(ts_four_reshaped)
+                doc_four_blocks.extend([[row['dyadID'], session, activity]] * ts_four_reshaped.shape[0])
+
+matrix_one_brain = np.concatenate(ts_one_brain, axis = 0)
+print(
+    f"Data for single brain preprocessed: {matrix_one_brain.shape[0]} trials, {matrix_one_brain.shape[1]} channels, "
+    f"{matrix_one_brain.shape[2]} time points"
+)
+matrix_two_blocks = np.concatenate(ts_two_blocks, axis = 0)
+print(
+    f"Data for two blocks preprocessed: {matrix_two_blocks.shape[0]} trials, {matrix_two_blocks.shape[1]} channels, "
+    f"{matrix_two_blocks.shape[2]} time points"
+)
+matrix_four_blocks = np.concatenate(ts_four_blocks, axis = 0)
+print(
+    f"Data for four blocks preprocessed: {matrix_four_blocks.shape[0]} trials, {matrix_four_blocks.shape[1]} channels, "
+    f"{matrix_four_blocks.shape[2]} time points"
+)
+
+doc_one_brain = pd.DataFrame(doc_one_brain)
+doc_two_blocks = pd.DataFrame(doc_two_blocks)
+doc_four_blocks = pd.DataFrame(doc_four_blocks)
 
 print(
-    f"Data preprocessed: {result.shape[0]} trials, {result.shape[1]} channels, "
-    f"{result.shape[2]} time points"
+    f"Data preprocessed: {matrix_four_blocks.shape[0]} trials, {matrix_four_blocks.shape[1]} channels, "
+    f"{matrix_four_blocks.shape[2]} time points"
 )
 
 # save 
-documentation.to_csv('documentation.csv')
-np.save('preprocessed_data', result)
+doc_one_brain.to_csv(str(path + 'doc_one_brain.csv'))
+np.save(str(path + 'matrix_one_brain'), matrix_one_brain)
+doc_two_blocks.to_csv(str(path + 'doc_two_blocks.csv'))
+np.save(str(path + 'matrix_two_blocks'), matrix_two_blocks)
+doc_four_blocks.to_csv(str(path + 'doc_four_blocks.csv'))
+np.save(str(path + 'matrix_four_blocks'), matrix_four_blocks)
