@@ -16,14 +16,14 @@ import pandas as pd
 import scipy as sp
 import mne
 
-path = "./data/"
+path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data/"
 inpath = str(path + "/sourcedata/")
 
 ### custom functions
 def reshape(ts, upsampling_freq, window_length): 
     trim_size = ts.shape[1] % (upsampling_freq*window_length)
     ts_trimmed = ts[:, :-trim_size] if trim_size != 0 else ts
-    ts_reshaped = ts_trimmed.reshape(-1, 16, (upsampling_freq*window_length))
+    ts_reshaped = ts_trimmed.reshape(-1, ts.shape[0], (upsampling_freq*window_length))
     return ts_reshaped
 
 ## Import data
@@ -109,17 +109,18 @@ for file in os.listdir(inpath):
                            mne.events_from_annotations(raw_haemo)[0][[0]],
                            tmin = 0,
                            tmax = annot['duration'],
-                           baseline = None)
+                           baseline = None, 
+                           verbose = 'WARNING')
             epoch_list.append(epoch)
         
         for epoch in epoch_list:
-            epoch.load_data()
+            epoch.load_data(verbose = 'WARNING')
             # upsample data
-            epoch.resample(100)
+            epoch.resample(100, verbose = 'WARNING')
             
             # zero-phase 3rd order Butterworth filters to remove 0.03 - 0.1 Hz
-            epoch.filter(0.02, 0.2, method='iir', iir_params=dict(order=3, ftype='butter'))  # Keeps 0.02-0.2 Hz
-            epoch.filter(0.03, 0.1, method='iir', iir_params=dict(order=3, ftype='butter', btype='bandstop'))  # Removes 0.03-0.1 Hz
+            epoch.filter(0.02, 0.2, method='iir', iir_params=dict(order=3, ftype='butter'), verbose = 'WARNING')  # Keeps 0.02-0.2 Hz
+            epoch.filter(0.03, 0.1, method='iir', iir_params=dict(order=3, ftype='butter', btype='bandstop'), verbose = 'WARNING')  # Removes 0.03-0.1 Hz
         
         # write into dictionary
         keyname = file[:-6]
