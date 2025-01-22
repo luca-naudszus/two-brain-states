@@ -16,7 +16,7 @@ import pandas as pd
 import scipy as sp
 import mne
 
-path = "./data/"
+path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data/"
 inpath = str(path + "/sourcedata/")
 
 ### custom functions
@@ -32,7 +32,7 @@ def reshape(ts, upsampling_freq, window_length):
 dyads = pd.read_csv(str(path + "dyadList.csv"))
 
 ### get list of best channels per ROI
-BESTchannels = pd.read_csv(str(path + "best_channels.csv"))
+BESTchannels = pd.read_csv(str(path + "fNIRS_best_channels.csv"))
 BESTchannels.dropna(axis = 0, how = 'any', inplace = True)
 BESTchannels['session'] = BESTchannels['session'].astype(int)
 BESTchannels['ID'] = BESTchannels['ID'].astype(int)

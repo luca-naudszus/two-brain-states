@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import urllib.request
 
+from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.linalg import block_diag
@@ -28,7 +29,7 @@ ker_est_functions = [
 ]
 from pyriemann.utils.covariance import cov_est_functions
 
-block_size = 8 # number of channels for HbO and HbR
+block_size = 4 # number of channels for HbO and HbR
 n_jobs = -1 # use all available cores
 cv_splits = 5 # number of cross-validation folds
 random_state = 42 # random state for reproducibility
@@ -293,8 +294,8 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
 
 ### Load data
 # Load the dataset
-X = np.load('preprocessed_data.npy')
-doc = pd.read_csv('documentation.csv', index_col = 0)
+X = np.load('./data/matrix_two_blocks_t.npy')
+doc = pd.read_csv('./data/doc_two_blocks_t.csv', index_col = 0)
 conditions = [
     (doc['2'] == 0),
     (doc['2'] == 1) | (doc['2'] == 2),
@@ -318,16 +319,16 @@ X_MT_erp = np.mean(X[MT_trials_indices, :, :], axis=0)
 channel_index = 2
 
 # Plot the averaged signals
-plt.figure(figsize=(10, 5))
-plt.plot(X_MT_erp[channel_index, :], label="HbO P1", color="red")
-plt.plot(X_MT_erp[channel_index + 4, :], label="HbR P1", color="darkred")
-plt.plot(X_MT_erp[channel_index + 8, :], label="HbO P2", color="blue")
-plt.plot(X_MT_erp[channel_index + 12, :], label="HbR P2", color="darkblue")
-plt.xlabel("Time samples")
-plt.ylabel("Signal Amplitude")
-plt.title(f"ERP for collaboration trials in channel {channel_index}")
-plt.legend()
-plt.show()
+# plt.figure(figsize=(10, 5))
+# plt.plot(X_MT_erp[channel_index, :], label="HbO P1", color="red")
+# plt.plot(X_MT_erp[channel_index + 4, :], label="HbR P1", color="darkred")
+# plt.plot(X_MT_erp[channel_index + 8, :], label="HbO P2", color="blue")
+# plt.plot(X_MT_erp[channel_index + 12, :], label="HbR P2", color="darkblue")
+# plt.xlabel("Time samples")
+# plt.ylabel("Signal Amplitude")
+# plt.title(f"ERP for collaboration trials in channel {channel_index}")
+# plt.legend()
+# plt.show()
 
 ### Set up the pipeline
 
@@ -336,19 +337,19 @@ pipeline_hybrid_blocks = Pipeline(
     [
         ("block_kernels", HybridBlocks(block_size=block_size)),
 #        ("classifier", SVC(metric="riemann", C=1)),
-        ("classifier", SVC(metric="riemann"))
+        ("classifier", SVC())
     ]
 )
 
 # Define the pipeline with BlockCovariances and SVC classifier
-pipeline_blockcovariances = Pipeline(
-    [
-        ("covariances", BlockCovariances(block_size=block_size)),
-        ('shrinkage', Shrinkage()),
+#pipeline_blockcovariances = Pipeline(
+#    [
+#        ("covariances", BlockCovariances(block_size=block_size)),
+#        ('shrinkage', Shrinkage()),
 #        ("classifier", SVC(metric="riemann", C=1)),
-        ("classifier", SVC(metric="riemann"))
-    ]
-)
+#        ("classifier", SVC(metric="riemann"))
+#    ]
+#)
 
 # Define the hyperparameters for fitting
 #pipeline_hybrid_blocks.set_params(
@@ -356,10 +357,10 @@ pipeline_blockcovariances = Pipeline(
 #    block_kernels__metrics= ['cov', 'rbf']
 #    )
 
-pipeline_blockcovariances.set_params(
-    covariances__estimator='lwf',
+#pipeline_blockcovariances.set_params(
+#    covariances__estimator='lwf',
 #   shrinkage__shrinkage=0.0001
-    )
+#    )
 
 # Define cross-validation
 cv = StratifiedKFold(
@@ -397,34 +398,38 @@ cv = StratifiedKFold(
 
 # Define grid search
 param_grid_hybrid_blocks = {
-    'block_kernels__shrinkage': [0.01, 0.1],
-    'block_kernels__metrics': ['cov', 'rbf'],
-    'classifier__C': [0.1, 1, 10],       # Regularization parameter
+    'block_kernels__shrinkage': [0, 0.01, 0.1],
+    'block_kernels__metrics': ['cov', 'rbf', 'lwf', 'tyl', 'corr'],
+    'classifier__C': [0.1, 1, 2],       # Regularization parameter
+    'classifier__metric': ['riemann']
 }
 
-param_grid_blockcovariances = {
-    'classifier__C': [0.1, 1, 10],       # Regularization parameter
-    'shrinkage__shrinkage': [0.01, 0.1]
-}
-
+#param_grid_blockcovariances = {
+#    'classifier__C': [0.1, 1, 10],       # Regularization parameter
+#    'shrinkage__shrinkage': [0.01, 0.1]
+#}
 grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
                            param_grid_hybrid_blocks, 
                            cv=cv, 
                            scoring='accuracy', 
-                           n_jobs=n_jobs)
+                           n_jobs=n_jobs,
+                           verbose=4)
 
-grid_search_blockcovariances = GridSearchCV(pipeline_blockcovariances, 
-                           param_grid_blockcovariances, 
-                           cv=cv, 
-                           scoring='accuracy', 
-                           n_jobs=n_jobs)
+#grid_search_blockcovariances = GridSearchCV(pipeline_blockcovariances, 
+#                           param_grid_blockcovariances, 
+#                           cv=cv, 
+#                           scoring='accuracy', 
+#                           n_jobs=n_jobs)
 
 # execute grid search
+print("executing grid search")
 grid_search_hybrid_blocks.fit(X, y)
-grid_search_blockcovariances.fit(X, y)
+#grid_search_blockcovariances.fit(X, y)
 
 # save results
+print("saving results")
+timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 results_hybrid_blocks = pd.DataFrame(grid_search_hybrid_blocks.cv_results_)
-results_hybrid_blocks.to_csv("grid_search_hybrid_blocks_results.csv", index=False)
-results_blockcovariances = pd.DataFrame(grid_search_blockcovariances.cv_results_)
-results_blockcovariances.to_csv("grid_search_blockcovariances_results.csv", index=False)
+results_hybrid_blocks.to_csv(f"results/grid_search_hybrid_blocks_results_{timestamp}.csv", index=False)
+#results_blockcovariances = pd.DataFrame(grid_search_blockcovariances.cv_results_)
+#results_blockcovariances.to_csv("grid_search_blockcovariances_results.csv", index=False)
