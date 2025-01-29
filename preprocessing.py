@@ -60,9 +60,13 @@ for file in os.listdir(inpath):
         #print("*** " + str(pID) + " " + str(session_n))
         new_name = file[:-6] + "_pre"
 
-        # extract best channels
+        # extract best channels, currently only using recording a
         best_chs = BESTchannels.loc[(BESTchannels['ID'] == pID) &
-                                    (BESTchannels['session'] == session_n)]
+                                    (BESTchannels['session'] == session_n) &
+                                    (BESTchannels['recording'] == 'a')]
+        if best_chs.shape[0] != 4:
+            error_log.append((file[:-6], 'no channel for one or multiple ROIs'))
+            continue
         # preprocess data
         raw = mne.io.read_raw_snirf(nirs_path)
 
@@ -263,35 +267,19 @@ for i, row in dyads.iterrows():
                 for ts, pID in zip([target_ts, partner_ts], [row['pID1'], row['pID2']]):
 #                    ts_reshaped = reshape(ts, upsampling_freq, window_length)
                     ts_one_brain.append(ts)
-                    doc_one_brain.extend([pID, session, activity])
+                    doc_one_brain.extend([[pID, session, activity]])
 
                 # second, two blocks: target + partner
                 ts_two = np.concatenate((target_ts, partner_ts), axis = 0)
 #                ts_two_reshaped = reshape(ts_two, upsampling_freq, window_length)            
                 ts_two_blocks.append(ts_two)
-                doc_two_blocks.extend([row['dyadID'], session, activity])
+                doc_two_blocks.extend([[row['dyadID'], session, activity]])
 
                 # third, four blocks: target HbO, partner HbO, target HbR, partner HbR
                 ts_four = np.concatenate((target_ts[:4], partner_ts[:4], target_ts[4:8], partner_ts[4:8]), axis=0)
 #                ts_four_reshaped = reshape(ts_four, upsampling_freq, window_length)
                 ts_four_blocks.append(ts_four)
-                doc_four_blocks.extend([row['dyadID'], session, activity])
-
-matrix_one_brain = np.concatenate(ts_one_brain, axis = 0)
-print(
-    f"Data for single brain preprocessed: {matrix_one_brain.shape[0]} trials, {matrix_one_brain.shape[1]} channels, "
-    f"{matrix_one_brain.shape[2]} time points"
-)
-matrix_two_blocks = np.concatenate(ts_two_blocks, axis = 0)
-print(
-    f"Data for two blocks preprocessed: {matrix_two_blocks.shape[0]} trials, {matrix_two_blocks.shape[1]} channels, "
-    f"{matrix_two_blocks.shape[2]} time points"
-)
-matrix_four_blocks = np.concatenate(ts_four_blocks, axis = 0)
-print(
-    f"Data for four blocks preprocessed: {matrix_four_blocks.shape[0]} trials, {matrix_four_blocks.shape[1]} channels, "
-    f"{matrix_four_blocks.shape[2]} time points"
-)
+                doc_four_blocks.extend([[row['dyadID'], session, activity]])
 
 doc_one_brain = pd.DataFrame(doc_one_brain)
 doc_two_blocks = pd.DataFrame(doc_two_blocks)
@@ -299,8 +287,8 @@ doc_four_blocks = pd.DataFrame(doc_four_blocks)
 
 # save
 doc_one_brain.to_csv(str(path + 'doc_one_brain.csv'))
-np.save(str(path + 'matrix_one_brain'), matrix_one_brain)
+np.savez(str(path + 'matrix_one_brain'), *ts_one_brain)
 doc_two_blocks.to_csv(str(path + 'doc_two_blocks.csv'))
-np.save(str(path + 'matrix_two_blocks'), matrix_two_blocks)
+np.savez(str(path + 'matrix_two_blocks'), *ts_two_blocks)
 doc_four_blocks.to_csv(str(path + 'doc_four_blocks.csv'))
-np.save(str(path + 'matrix_four_blocks'), matrix_four_blocks)
+np.savez(str(path + 'matrix_four_blocks'), *ts_four_blocks)
