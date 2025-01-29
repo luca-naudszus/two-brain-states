@@ -68,6 +68,20 @@ class WindowTransformer(BaseEstimator, TransformerMixin):
         X_windows = X[:, :truncated_length].reshape(n_channels, n_windows, self.window_size)
         return np.transpose(X_windows, (1, 0, 2))
 
+class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
+    """Transforms a list of time series into non-overlapping windows of shape (n_channels, window_size). 
+        Author: Luca Naudszus."""
+    def __init__(self, window_size = 1000):
+        self.window_size = window_size
+        self.base_transformer = WindowTransformer(window_size)
+
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X):
+        assert isinstance(X, list), "Input must be a list of NumPy arrays"
+        return [self.base_transformer.transform(x) for x in X]
+
 class Stacker(TransformerMixin):
     """Stacks values of a DataFrame column into a 3D array. Author: Tim Näher."""
     def fit(self, X, y=None):
@@ -457,7 +471,7 @@ for shrinkage in [0.01, 0.1]: # [0, 0.01, 0.1]
         for n_clusters in range(3, 8): # range(3, 11)
             pipeline_hybrid_blocks = Pipeline(
                     [
-                        ("windows", WindowTransformer(
+                        ("windows", ListTimeSeriesWindowTransformer(
                                         ))
                         ("block_kernels", HybridBlocks(block_size=block_size,
                                         shrinkage=shrinkage, 
