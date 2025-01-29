@@ -20,11 +20,11 @@ path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational
 inpath = str(path + "/sourcedata/")
 
 ### custom functions
-def reshape(ts, upsampling_freq, window_length):
-    trim_size = ts.shape[1] % (upsampling_freq*window_length)
-    ts_trimmed = ts[:, :-trim_size] if trim_size != 0 else ts
-    ts_reshaped = ts_trimmed.reshape(-1, ts.shape[0], (upsampling_freq*window_length))
-    return ts_reshaped
+#def reshape(ts, upsampling_freq, window_length):
+#    trim_size = ts.shape[1] % (upsampling_freq*window_length)
+#    ts_trimmed = ts[:, :-trim_size] if trim_size != 0 else ts
+#    ts_reshaped = ts_trimmed.reshape(-1, ts.shape[0], (upsampling_freq*window_length))
+#    return ts_reshaped
 
 ## Import data
 
@@ -261,19 +261,21 @@ for i, row in dyads.iterrows():
 
                 # first, one-brain data
                 for ts, pID in zip([target_ts, partner_ts], [row['pID1'], row['pID2']]):
-                    ts_reshaped = reshape(ts, upsampling_freq, window_length)
-                    ts_one_brain.append(ts_reshaped)
-                    doc_one_brain.extend([[pID, session, activity]] * ts_reshaped.shape[0])
+#                    ts_reshaped = reshape(ts, upsampling_freq, window_length)
+                    ts_one_brain.append(ts)
+                    doc_one_brain.extend([pID, session, activity])
 
                 # second, two blocks: target + partner
-                ts_two_reshaped = reshape(np.concatenate((target_ts, partner_ts), axis=0), upsampling_freq, window_length)
-                ts_two_blocks.append(ts_two_reshaped)
-                doc_two_blocks.extend([[row['dyadID'], session, activity]] * ts_two_reshaped.shape[0])
+                ts_two = np.concatenate((target_ts, partner_ts), axis = 0)
+#                ts_two_reshaped = reshape(ts_two, upsampling_freq, window_length)            
+                ts_two_blocks.append(ts_two)
+                doc_two_blocks.extend([row['dyadID'], session, activity])
 
                 # third, four blocks: target HbO, partner HbO, target HbR, partner HbR
-                ts_four_reshaped = reshape(np.concatenate((target_ts[:4], partner_ts[:4], target_ts[4:8], partner_ts[4:8]), axis=0), upsampling_freq, window_length)
-                ts_four_blocks.append(ts_four_reshaped)
-                doc_four_blocks.extend([[row['dyadID'], session, activity]] * ts_four_reshaped.shape[0])
+                ts_four = np.concatenate((target_ts[:4], partner_ts[:4], target_ts[4:8], partner_ts[4:8]), axis=0)
+#                ts_four_reshaped = reshape(ts_four, upsampling_freq, window_length)
+                ts_four_blocks.append(ts_four)
+                doc_four_blocks.extend([row['dyadID'], session, activity])
 
 matrix_one_brain = np.concatenate(ts_one_brain, axis = 0)
 print(

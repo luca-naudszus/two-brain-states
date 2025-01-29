@@ -41,6 +41,9 @@ cv_splits = 5 # number of cross-validation folds
 random_state = 42 # random state for reproducibility
 n_clusters = 5 # number of clusters for k-means
 max_iter = 5 # maximum number of iterations
+upsampling_freq = 100 # frequency to which the data have been upsampled
+window_length = 10 # virtual trial length in s
+window_size = upsampling_freq * window_length
 #TODO: max_iter probably needs to be much, much higher
 
 # ------------------------------------------------------------
