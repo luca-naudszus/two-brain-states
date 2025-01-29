@@ -1,47 +1,72 @@
 # Author: Luca A. Naudszus, Social Brain Sciences, ETH Zurich
-# Date: 13 January 2025
+# Date: 27 January 2025
 
-import os
-from pathlib import Path
-import urllib.request
+
+# ------------------------------------------------------------
+# import packages
 
 from datetime import datetime
-import gc
-import warnings
+from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.linalg import block_diag
 import pandas as pd
-from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
 from sklearn.model_selection import StratifiedKFold
 from sklearn.compose import ColumnTransformer
 from sklearn.utils.validation import check_is_fitted
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import silhouette_score
 from pyriemann.classification import SVC
+from pyriemann.clustering import Kmeans
 from pyriemann.estimation import (
     BlockCovariances, 
     Covariances,
     Kernels,
     Shrinkage,
 )
+from pyriemann.utils.distance import distance_riemann, distance_wasserstein
 ker_est_functions = [
     "linear", "poly", "polynomial", "rbf", "laplacian", "cosine"
 ]
 from pyriemann.utils.covariance import cov_est_functions
 
-with warnings.catch_warnings():
-    warnings.simplefilter(action="ignore", category=FutureWarning)
-
+# ------------------------------------------------------------
+# define constant values
 block_size = 4 # number of channels for HbO and HbR
-n_jobs = 1 # use all available cores
+n_jobs = -1 # use all available cores
 cv_splits = 5 # number of cross-validation folds
 random_state = 42 # random state for reproducibility
+n_clusters = 5 # number of clusters for k-means
+max_iter = 5 # maximum number of iterations
+#TODO: max_iter probably needs to be much, much higher
 
+# ------------------------------------------------------------
+# define custom classes and functions
+class WindowTransformer(BaseEstimator, TransformerMixin):
+    """Splits the time series into non-overlapping windows of shape (n_channels, window_size). 
+        Author: Luca Naudszus."""
+    #TODO: add a function to vary step size
+    def __init__(self, window_size=1000):
+        self.window_size = window_size
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        assert isinstance(X, np.ndarray), "Input must be a NumPy array"
+        n_channels = X.shape[0]
+        assert X.ndim == 2 and (n_channels in {8, 16}), "Unexpected input shape"
+        n_samples = X.shape[1]
+        n_windows = n_samples // self.window_size
+        truncated_length = n_windows * self.window_size
+        X_windows = X[:, :truncated_length].reshape(n_channels, n_windows, self.window_size)
+        return np.transpose(X_windows, (1, 0, 2))
 
 class Stacker(TransformerMixin):
-    """Stacks values of a DataFrame column into a 3D array."""
+    """Stacks values of a DataFrame column into a 3D array. Author: Tim Näher."""
     def fit(self, X, y=None):
         return self
 
@@ -54,7 +79,7 @@ class Stacker(TransformerMixin):
 class FlattenTransformer(BaseEstimator, TransformerMixin):
     """Flattens the last two dimensions of an array.
         ColumnTransformer requires 2D output, so this transformer
-        is needed"""
+        is needed. Author: Tim Näher."""
     def fit(self, X, y=None):
         return self
 
@@ -102,6 +127,8 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
     See Also
     --------
     BlockCovariances
+    
+    Author: Tim Näher.
     """
 
     def __init__(self, block_size, metrics="linear", shrinkage=0,
@@ -298,10 +325,70 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
             data_dict[self.block_names[i]] = list(X[:, start:end, :])
         return pd.DataFrame(data_dict)
 
+class RiemannianKMeans(BaseEstimator, ClusterMixin):
+    """Wrapper for pyriemann.clustering.KMeans for usage in GridSearchCV. 
+        Author: Luca Naudszus."""
+    def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter):
+        self.n_clusters = n_clusters
+        self.n_jobs = n_jobs
+        self.max_iter = max_iter
+        self.metric = "riemann"
+        self.kmeans = Kmeans(n_clusters=n_clusters, 
+        n_jobs = n_jobs, 
+        max_iter = max_iter,
+        metric = "riemann")
+
+    def fit(self, X, y=None):
+        print(f"Fitting data with shape {X.shape}")
+        self.kmeans.fit(X)
+        self.labels_ = self.kmeans.labels_
+        return self
+
+    def predict(self, X):
+        print(f"Predicting data with shape {X.shape}")
+        return self.kmeans.predict(X)
+
+    def fit_predict(self, X, y=None):
+        return self.fit(X).labels_
+        
+def riemannian_silhouette_score(pipeline, X, y = None, n_jobs = n_jobs, distance=distance_wasserstein): 
+    # Calculates pairwise Bures-Wasserstein distance (distance_wasserstein)
+    # We could also use the Affine-Invariant Riemannian Metric (distance_riemann), 
+    # which is what is used in the actual Lloyd's algorithm as implemented above.
+    # However, AIRM takes much more time.  
+
+    # (1) Extract matrices
+    block_matrices = pipeline.named_steps["block_kernels"].transform(X)
+    preds = pipeline.named_steps["kmeans"].labels_
+    n_matrices = block_matrices.shape[0]
+    print(f"Processing: {preds.shape[0]} labels, {X.shape[0]} data points")
+    
+    # (2) Parallel execution of distance calculation
+    def compute_distance(i, j, matrices, distance):
+        if j == 0:
+            print(f"Processing i = {i} (outer loop)")
+        return distance(matrices[i], matrices[j])
+
+    pairwise_distances = Parallel(n_jobs=n_jobs)(
+        delayed(compute_distance)(i, j, block_matrices, distance)
+        for i in range(n_matrices) for j in range(i+1, n_matrices)
+    )
+    
+    # (3) Convert list into full distance matrix
+    pairwise_distances_matrix = np.zeros((n_matrices, n_matrices))
+    idx = np.triu_indices(n_matrices, 1)
+    pairwise_distances_matrix[idx] = pairwise_distances
+    pairwise_distances_matrix += pairwise_distances_matrix.T
+
+    # (4) Calculate silhouette score
+    score = silhouette_score(pairwise_distances_matrix, preds, metric='precomputed')
+    return score
+            
+# ------------------------------------------------------------
 ### Load data
 # Load the dataset
-X = np.load('./data/matrix_two_blocks_t.npy')
-doc = pd.read_csv('./data/doc_two_blocks_t.csv', index_col = 0)
+X = np.load('./data/matrix_four_blocks_t.npy')
+doc = pd.read_csv('./data/doc_four_blocks_t.csv', index_col = 0)
 conditions = [
     (doc['2'] == 0),
     (doc['2'] == 1) | (doc['2'] == 2),
@@ -314,130 +401,76 @@ print(
     f"{X.shape[2]} time points"
 )
 
-# Get trials with the label "collab" for "collaboration"
-MT_label = "collab"
-MT_trials_indices = np.where(y == MT_label)[0]
-
-# Average the data across the "collab" trials
-X_MT_erp = np.mean(X[MT_trials_indices, :, :], axis=0)
-
-# select example channel
-channel_index = 2
-
-# Plot the averaged signals
-# plt.figure(figsize=(10, 5))
-# plt.plot(X_MT_erp[channel_index, :], label="HbO P1", color="red")
-# plt.plot(X_MT_erp[channel_index + 4, :], label="HbR P1", color="darkred")
-# plt.plot(X_MT_erp[channel_index + 8, :], label="HbO P2", color="blue")
-# plt.plot(X_MT_erp[channel_index + 12, :], label="HbR P2", color="darkblue")
-# plt.xlabel("Time samples")
-# plt.ylabel("Signal Amplitude")
-# plt.title(f"ERP for collaboration trials in channel {channel_index}")
-# plt.legend()
-# plt.show()
-
+# ------------------------------------------------------------
 ### Set up the pipeline
 
 # Define the pipeline with HybridBlocks and SVC classifier
 pipeline_hybrid_blocks = Pipeline(
     [
-        ("block_kernels", HybridBlocks(block_size=block_size)),
-#        ("classifier", SVC(metric="riemann", C=1)),
-        ("classifier", SVC())
-    ]
+        ("windows", WindowTransformer()),
+        ("block_kernels", HybridBlocks(block_size=block_size,
+                                       shrinkage=0, 
+                                       metrics="cov"
+        )),
+        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
+#            n_clusters=n_clusters, 
+            max_iter=max_iter))
+    ], verbose = True
 )
 
-# Define the pipeline with BlockCovariances and SVC classifier
-#pipeline_blockcovariances = Pipeline(
-#    [
-#        ("covariances", BlockCovariances(block_size=block_size)),
-#        ('shrinkage', Shrinkage()),
-#        ("classifier", SVC(metric="riemann", C=1)),
-#        ("classifier", SVC(metric="riemann"))
-#    ]
-#)
+# ------------------------------------------------------------
+### Fit the models
+pipeline_hybrid_blocks.fit(X)
+riemannian_silhouette_score(pipeline_hybrid_blocks, X)
 
-# Define the hyperparameters for fitting
-#pipeline_hybrid_blocks.set_params(
-#    block_kernels__shrinkage=[0.02, 0.02], 
-#    block_kernels__metrics= ['cov', 'rbf']
-#    )
-
-#pipeline_blockcovariances.set_params(
-#    covariances__estimator='lwf',
-#   shrinkage__shrinkage=0.0001
-#    )
-
-# Define cross-validation
-cv = StratifiedKFold(
-    n_splits=cv_splits,
-    random_state=random_state,
-    shuffle=True
-    )
-
-### Fit the two models
-#cv_scores_hybrid_blocks = cross_val_score(
-#    pipeline_hybrid_blocks, X, y,
-#    cv=cv, scoring="accuracy", n_jobs=n_jobs
-#    )
-
-#cv_scores_blockcovariances = cross_val_score(
-#    pipeline_blockcovariances, X, y,
-#    cv=cv, scoring="accuracy", n_jobs=n_jobs)
-
-### Print and plot results
-#acc_hybrid_blocks = np.mean(cv_scores_hybrid_blocks)
-#acc_blockcovariances = np.mean(cv_scores_blockcovariances)
-
-#print(f"Mean accuracy for HybridBlocks: {acc_hybrid_blocks:.2f}")
-#print(f"Mean accuracy for BlockCovariances: {acc_blockcovariances:.2f}")
-
-# plot a scatter plot of CV and median scores
-#plt.figure(figsize=(6, 6))
-#plt.scatter(cv_scores_hybrid_blocks, cv_scores_blockcovariances)
-#plt.plot([0.4, 1], [0.4, 1], "--", color="black")
-#plt.xlabel("Accuracy HybridBlocks")
-#plt.ylabel("Accuracy BlockCovariances")
-#plt.title("Comparison of HybridBlocks and Covariances")
-#plt.legend(["CV Fold Scores"])
-#plt.show()
+# ------------------------------------------------------------
+### Grid search
 
 # Define grid search
 param_grid_hybrid_blocks = {
+    'windows__window_size': [500, 1000, 2000],
     'block_kernels__shrinkage': [0, 0.01, 0.1],
     'block_kernels__metrics': ['cov', 'rbf', 'lwf', 'tyl', 'corr'],
-    'classifier__C': [0.1, 1, 2],       # Regularization parameter
-    'classifier__metric': ['riemann']
+    'kmeans__n_clusters': range(3, 11)
 }
 
-#param_grid_blockcovariances = {
-#    'classifier__C': [0.1, 1, 10],       # Regularization parameter
-#    'shrinkage__shrinkage': [0.01, 0.1]
-#}
 grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
                            param_grid_hybrid_blocks, 
-                           cv=cv, 
-                           scoring='accuracy', 
+                           scoring=riemannian_silhouette_score, 
                            n_jobs=n_jobs,
-                           verbose=10)
-
-#grid_search_blockcovariances = GridSearchCV(pipeline_blockcovariances, 
-#                           param_grid_blockcovariances, 
-#                           cv=cv, 
-#                           scoring='accuracy', 
-#                           n_jobs=n_jobs)
+                           verbose=10,
+                           error_score="raise")
 
 # execute grid search
+#TODO: Currently, this does not work because labels and data are not taken 
+# from the same fold. 
 print("executing grid search")
-grid_search_hybrid_blocks.fit(X, y)
-#grid_search_blockcovariances.fit(X, y)
-print("collecting garbage")
-gc.collect()
+grid_search_hybrid_blocks.fit(X)
+
+# custom grid search
+scores = []
+for shrinkage in [0.01, 0.1]: # [0, 0.01, 0.1]
+    for kernel in ['cov', 'rbf']: #, 'lwf', 'tyl', 'corr']:
+        for n_clusters in range(3, 8): # range(3, 11)
+            pipeline_hybrid_blocks = Pipeline(
+                    [
+                        ("windows", WindowTransformer(
+                                        ))
+                        ("block_kernels", HybridBlocks(block_size=block_size,
+                                        shrinkage=shrinkage, 
+                                        metrics=kernel
+                                        )),
+                        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
+                                        n_clusters=n_clusters, 
+                                        max_iter=max_iter
+                                        ))
+                    ], verbose = True       
+            )
+            pipeline_hybrid_blocks.fit(X)
+            scores.append(riemannian_silhouette_score(pipeline_hybrid_blocks, X))
 
 # save results
 print("saving results")
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 results_hybrid_blocks = pd.DataFrame(grid_search_hybrid_blocks.cv_results_)
 results_hybrid_blocks.to_csv(f"results/grid_search_hybrid_blocks_results_{timestamp}.csv", index=False)
-#results_blockcovariances = pd.DataFrame(grid_search_blockcovariances.cv_results_)
-#results_blockcovariances.to_csv("grid_search_blockcovariances_results.csv", index=False)
