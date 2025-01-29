@@ -80,7 +80,8 @@ class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
     
     def transform(self, X):
         assert isinstance(X, list), "Input must be a list of NumPy arrays"
-        return [self.base_transformer.transform(x) for x in X]
+        transformed = [self.base_transformer.transform(x) for x in X]
+        return np.concatenate(transformed, axis = 0)
 
 class Stacker(TransformerMixin):
     """Stacks values of a DataFrame column into a 3D array. Author: Tim Näher."""
@@ -404,8 +405,11 @@ def riemannian_silhouette_score(pipeline, X, y = None, n_jobs = n_jobs, distance
 # ------------------------------------------------------------
 ### Load data
 # Load the dataset
-X = np.load('./data/matrix_four_blocks_t.npy')
-doc = pd.read_csv('./data/doc_four_blocks_t.csv', index_col = 0)
+npz = np.load('./data/ts_one_brain.npz')
+X = []
+for array in list(npz.files):
+    X.append(npz[array])
+doc = pd.read_csv('./data/doc_one_brain.csv', index_col = 0)
 conditions = [
     (doc['2'] == 0),
     (doc['2'] == 1) | (doc['2'] == 2),
@@ -414,8 +418,7 @@ choices = ['alone', 'collab', 'diverse']
 y = np.select(conditions, choices, default='unknown')
 
 print(
-    f"Data loaded: {X.shape[0]} trials, {X.shape[1]} channels, "
-    f"{X.shape[2]} time points"
+    f"Data loaded: {len(X)} trials, {X[0].shape[0]} channels"
 )
 
 # ------------------------------------------------------------
@@ -424,7 +427,7 @@ print(
 # Define the pipeline with HybridBlocks and SVC classifier
 pipeline_hybrid_blocks = Pipeline(
     [
-        ("windows", WindowTransformer()),
+        ("windows", ListTimeSeriesWindowTransformer()),
         ("block_kernels", HybridBlocks(block_size=block_size,
                                        shrinkage=0, 
                                        metrics="cov"
@@ -472,7 +475,7 @@ for shrinkage in [0.01, 0.1]: # [0, 0.01, 0.1]
             pipeline_hybrid_blocks = Pipeline(
                     [
                         ("windows", ListTimeSeriesWindowTransformer(
-                                        ))
+                                        )),
                         ("block_kernels", HybridBlocks(block_size=block_size,
                                         shrinkage=shrinkage, 
                                         metrics=kernel

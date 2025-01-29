@@ -287,8 +287,8 @@ doc_four_blocks = pd.DataFrame(doc_four_blocks)
 
 # save
 doc_one_brain.to_csv(str(path + 'doc_one_brain.csv'))
-np.savez(str(path + 'matrix_one_brain'), *ts_one_brain)
+np.savez(str(path + 'ts_one_brain'), *ts_one_brain)
 doc_two_blocks.to_csv(str(path + 'doc_two_blocks.csv'))
-np.savez(str(path + 'matrix_two_blocks'), *ts_two_blocks)
+np.savez(str(path + 'ts_two_blocks'), *ts_two_blocks)
 doc_four_blocks.to_csv(str(path + 'doc_four_blocks.csv'))
-np.savez(str(path + 'matrix_four_blocks'), *ts_four_blocks)
+np.savez(str(path + 'ts_four_blocks'), *ts_four_blocks)
