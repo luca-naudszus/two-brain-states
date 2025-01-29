@@ -45,6 +45,7 @@ for file in os.listdir(inpath):
                                     (BESTchannels['session'] == session_n) &
                                     (BESTchannels['recording'] == 'a')]
         if best_chs.shape[0] != 4:
+            #TODO: Deal with recordings with missing ROIs
             error_log.append((file[:-6], 'no channel for one or multiple ROIs'))
             continue
         
@@ -57,12 +58,15 @@ for file in os.listdir(inpath):
         chshbo = list(best_chs['channel'] + " hbo")
         keep_chs = chshbr + chshbo
         if len(keep_chs) != len(set(keep_chs)):
+            #TODO: find out if this error occurs and if so why
             error_log.append((file[:-8], 'duplicate best channels'))
             continue
         if len(keep_chs) == 0:
+            #TODO: find out if this error occurs and if so why
             error_log.append((file[:-8], 'no information on best channels'))
             continue
         if len(set(keep_chs) - set(data.info['ch_names'])) != 0:
+            #TODO: find out if this error occurs and if so why
             error_log.append((file[:-8], 'best channels are non-existent'))
             continue
         data_good_chs = data.pick(keep_chs)

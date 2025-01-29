@@ -44,7 +44,7 @@ max_iter = 5 # maximum number of iterations
 upsampling_freq = 100 # frequency to which the data have been upsampled
 window_length = 10 # virtual trial length in s
 window_size = upsampling_freq * window_length
-#TODO: max_iter probably needs to be much, much higher
+#TODO: max_iter probably needs to be much, much higher; change only when it runs on the cluster
 
 # ------------------------------------------------------------
 # define custom classes and functions
@@ -429,15 +429,18 @@ print(
 ### Set up the pipeline
 
 # Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
+# This is the currently one of the best setups as evaluated by grid search below: 
 pipeline_hybrid_blocks = Pipeline(
     [
-        ("windows", ListTimeSeriesWindowTransformer()),
+        ("windows", ListTimeSeriesWindowTransformer(
+            window_size = 1500
+        )),
         ("block_kernels", HybridBlocks(block_size=block_size,
-                                       shrinkage=0.7, 
-                                       metrics="lwf"
+                                       shrinkage=0.3, 
+                                       metrics="rbf"
         )),
         ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
-            n_clusters=n_clusters, 
+            n_clusters=3, 
             max_iter=max_iter))
     ], verbose = True
 )
@@ -505,7 +508,8 @@ for window_size in [500, 1000, 1500]:
 scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'n_Clusters', 'SilhouetteCoefficient'])
 
 # save results
-print("saving results")
-timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-results_hybrid_blocks = pd.DataFrame(grid_search_hybrid_blocks.cv_results_)
-results_hybrid_blocks.to_csv(f"results/grid_search_hybrid_blocks_results_{timestamp}.csv", index=False)
+#TODO: adjust this part for Euler compatibility
+#print("saving results")
+#timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+#results_hybrid_blocks = pd.DataFrame(grid_search_hybrid_blocks.cv_results_)
+#results_hybrid_blocks.to_csv(f"results/grid_search_hybrid_blocks_results_{timestamp}.csv", index=False)
