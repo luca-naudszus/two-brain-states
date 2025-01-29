@@ -35,7 +35,7 @@ from pyriemann.utils.covariance import cov_est_functions
 
 # ------------------------------------------------------------
 # define constant values
-block_size = 4 # number of channels for HbO and HbR
+block_size = 8 # number of channels for HbO and HbR
 n_jobs = -1 # use all available cores
 cv_splits = 5 # number of cross-validation folds
 random_state = 42 # random state for reproducibility
@@ -334,6 +334,7 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
             block_diag(*[Xt[i] for Xt in transformed_blocks])
             for i in range(X.shape[0])
         ])
+        self.matrices_ = M_matrices
         return M_matrices
 
     def _prepare_dataframe(self, X):
@@ -368,18 +369,18 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
 
     def fit_predict(self, X, y=None):
         return self.fit(X).labels_
-        
-def riemannian_silhouette_score(pipeline, X, y = None, n_jobs = n_jobs, distance=distance_wasserstein): 
+    
+def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_wasserstein): 
     # Calculates pairwise Bures-Wasserstein distance (distance_wasserstein)
     # We could also use the Affine-Invariant Riemannian Metric (distance_riemann), 
     # which is what is used in the actual Lloyd's algorithm as implemented above.
     # However, AIRM takes much more time.  
 
     # (1) Extract matrices
-    block_matrices = pipeline.named_steps["block_kernels"].transform(X)
+    block_matrices = pipeline.named_steps["block_kernels"].matrices_
     preds = pipeline.named_steps["kmeans"].labels_
     n_matrices = block_matrices.shape[0]
-    print(f"Processing: {preds.shape[0]} labels, {X.shape[0]} data points")
+    print(f"Processing: {preds.shape[0]} labels, {n_matrices} data points")
     
     # (2) Parallel execution of distance calculation
     def compute_distance(i, j, matrices, distance):
@@ -441,7 +442,7 @@ pipeline_hybrid_blocks = Pipeline(
 # ------------------------------------------------------------
 ### Fit the models
 pipeline_hybrid_blocks.fit(X)
-riemannian_silhouette_score(pipeline_hybrid_blocks, X)
+riemannian_silhouette_score(pipeline_hybrid_blocks)
 
 # ------------------------------------------------------------
 ### Grid search
@@ -464,15 +465,16 @@ grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks,
 # execute grid search
 #TODO: Currently, this does not work because labels and data are not taken 
 # from the same fold. 
-print("executing grid search")
-grid_search_hybrid_blocks.fit(X)
+#print("executing grid search")
+#grid_search_hybrid_blocks.fit(X)
 
 # custom grid search
 scores = []
-for shrinkage in [0.01, 0.1]: # [0, 0.01, 0.1]
-    for kernel in ['cov', 'rbf']: #, 'lwf', 'tyl', 'corr']:
-        for n_clusters in range(3, 8): # range(3, 11)
-            pipeline_hybrid_blocks = Pipeline(
+for window_size in [500, 1000, 2000]:
+    for shrinkage in [0.01, 0.1]: # [0, 0.01, 0.1]
+        for kernel in ['cov', 'rbf']: #, 'lwf', 'tyl', 'corr']:
+            for n_clusters in range(3, 8): # range(3, 11)
+                pipeline_hybrid_blocks = Pipeline(
                     [
                         ("windows", ListTimeSeriesWindowTransformer(
                                         )),
@@ -485,9 +487,11 @@ for shrinkage in [0.01, 0.1]: # [0, 0.01, 0.1]
                                         max_iter=max_iter
                                         ))
                     ], verbose = True       
-            )
-            pipeline_hybrid_blocks.fit(X)
-            scores.append(riemannian_silhouette_score(pipeline_hybrid_blocks, X))
+                )
+                pipeline_hybrid_blocks.fit(X)
+                scores.append(
+                    [window_size, shrinkage, kernel, n_clusters, riemannian_silhouette_score(pipeline_hybrid_blocks)])
+scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'n_Clusters', 'SilhouetteScore'])
 
 # save results
 print("saving results")
