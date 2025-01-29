@@ -35,7 +35,7 @@ from pyriemann.utils.covariance import cov_est_functions
 
 # ------------------------------------------------------------
 # define constant values
-block_size = 8 # number of channels for HbO and HbR
+block_size = 4 # number of channels for HbO and HbR
 n_jobs = -1 # use all available cores
 cv_splits = 5 # number of cross-validation folds
 random_state = 42 # random state for reproducibility
@@ -345,7 +345,7 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
         return pd.DataFrame(data_dict)
 
 class RiemannianKMeans(BaseEstimator, ClusterMixin):
-    """Wrapper for pyriemann.clustering.KMeans for usage in GridSearchCV. 
+    """Wrapper for pyriemann.clustering.KMeans (Lloyd's algorithm for Riemannian manifolds) for usage in GridSearchCV. 
         Author: Luca Naudszus."""
     def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter):
         self.n_clusters = n_clusters
@@ -370,11 +370,10 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
     def fit_predict(self, X, y=None):
         return self.fit(X).labels_
     
-def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_wasserstein): 
-    # Calculates pairwise Bures-Wasserstein distance (distance_wasserstein)
-    # We could also use the Affine-Invariant Riemannian Metric (distance_riemann), 
-    # which is what is used in the actual Lloyd's algorithm as implemented above.
-    # However, AIRM takes much more time.  
+def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_riemann): 
+    # Calculates pairwise Affine-Invariant Riemannian Metric (distance_riemann). 
+    # We could also use Bures-Wasserstein distance (distance_wasserstein), which is a lot faster, 
+    # but not what is used in the actual Lloyd's algorithm as implemented above. 
 
     # (1) Extract matrices
     block_matrices = pipeline.named_steps["block_kernels"].matrices_
@@ -406,17 +405,21 @@ def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_was
 # ------------------------------------------------------------
 ### Load data
 # Load the dataset
-npz = np.load('./data/ts_one_brain.npz')
+npz = np.load('./data/ts_one_brain_t.npz')
 X = []
 for array in list(npz.files):
     X.append(npz[array])
-doc = pd.read_csv('./data/doc_one_brain.csv', index_col = 0)
+doc = pd.read_csv('./data/doc_one_brain_t.csv', index_col = 0)
 conditions = [
     (doc['2'] == 0),
     (doc['2'] == 1) | (doc['2'] == 2),
     (doc['2'] == 3)]
 choices = ['alone', 'collab', 'diverse']
 y = np.select(conditions, choices, default='unknown')
+
+# choose only drawing alone and collaborative drawing
+X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
+y = y[y != 'diverse']
 
 print(
     f"Data loaded: {len(X)} trials, {X[0].shape[0]} channels"
@@ -425,19 +428,22 @@ print(
 # ------------------------------------------------------------
 ### Set up the pipeline
 
-# Define the pipeline with HybridBlocks and SVC classifier
+# Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
 pipeline_hybrid_blocks = Pipeline(
     [
         ("windows", ListTimeSeriesWindowTransformer()),
         ("block_kernels", HybridBlocks(block_size=block_size,
-                                       shrinkage=0, 
-                                       metrics="cov"
+                                       shrinkage=0.7, 
+                                       metrics="lwf"
         )),
         ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
-#            n_clusters=n_clusters, 
+            n_clusters=n_clusters, 
             max_iter=max_iter))
     ], verbose = True
 )
+
+#TODO: Define other processing methods for blocks
+#TODO: Define non-Riemannian pipelines (for comparison)
 
 # ------------------------------------------------------------
 ### Fit the models
@@ -449,8 +455,8 @@ riemannian_silhouette_score(pipeline_hybrid_blocks)
 
 # Define grid search
 param_grid_hybrid_blocks = {
-    'windows__window_size': [500, 1000, 2000],
-    'block_kernels__shrinkage': [0, 0.01, 0.1],
+    'windows__window_size': [500, 1000, 1500],
+    'block_kernels__shrinkage': [0.01, 0.1, 0.2],
     'block_kernels__metrics': ['cov', 'rbf', 'lwf', 'tyl', 'corr'],
     'kmeans__n_clusters': range(3, 11)
 }
@@ -469,11 +475,16 @@ grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks,
 #grid_search_hybrid_blocks.fit(X)
 
 # custom grid search
+#TODO: implement additional scores here: Calinski-Harabasz index, Davies-Bouldin index
+# and (somewhat more difficult) a comparison based on Fowlkes-Mallows indices or pair confusion matrices
 scores = []
-for window_size in [500, 1000, 2000]:
-    for shrinkage in [0.01, 0.1]: # [0, 0.01, 0.1]
-        for kernel in ['cov', 'rbf']: #, 'lwf', 'tyl', 'corr']:
-            for n_clusters in range(3, 8): # range(3, 11)
+i = 0
+for window_size in [500, 1000, 1500]:
+    for shrinkage in [0.1, 0.2, 0.3, 0.4, 0.7]: 
+        for kernel in ['cov', 'rbf', 'lwf', 'tyl', 'corr']: 
+            for n_clusters in range(3, 8): 
+                i += 1
+                print(f"Iteration {i}, parameters: window size {window_size}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                 pipeline_hybrid_blocks = Pipeline(
                     [
                         ("windows", ListTimeSeriesWindowTransformer(
@@ -491,7 +502,7 @@ for window_size in [500, 1000, 2000]:
                 pipeline_hybrid_blocks.fit(X)
                 scores.append(
                     [window_size, shrinkage, kernel, n_clusters, riemannian_silhouette_score(pipeline_hybrid_blocks)])
-scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'n_Clusters', 'SilhouetteScore'])
+scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'n_Clusters', 'SilhouetteCoefficient'])
 
 # save results
 print("saving results")
