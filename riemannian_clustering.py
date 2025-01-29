@@ -462,7 +462,7 @@ grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks,
                            verbose=10,
                            error_score="raise")
 
-# execute grid search
+# execute grid search 
 #TODO: Currently, this does not work because labels and data are not taken 
 # from the same fold. 
 #print("executing grid search")
