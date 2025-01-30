@@ -119,9 +119,9 @@ for key in key_list:
         target_interp = []
         partner_interp = []
         target_epoch = target[in_epoch]
-        target_ts = target_epoch.get_data(copy = False)[0]
+        target_ts = target_epoch.get_data(copy = False, verbose=verbosity)[0]
         partner_epoch = partner[in_epoch]
-        partner_ts = partner_epoch.get_data(copy = False)[0]
+        partner_ts = partner_epoch.get_data(copy = False, verbose=verbosity)[0]
         original_lengths.append(
             [targetID, partnerID, session_n, in_epoch, np.shape(target_ts)[1], np.shape(partner_ts)[1]])
         # Find out which duration is longer, this will be the duration at which we aim.
