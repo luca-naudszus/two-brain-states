@@ -18,7 +18,7 @@ from sklearn.utils.validation import check_is_fitted
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from pyriemann.classification import SVC
 from pyriemann.clustering import Kmeans
 from pyriemann.estimation import (
@@ -408,6 +408,20 @@ def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_rie
     # (4) Calculate silhouette score
     score = silhouette_score(pairwise_distances_matrix, preds, metric='precomputed')
     return score
+
+def calinski_harabasz_score(pipeline):
+    # (1) Extract and transform matrices
+    flattener = FlattenTransformer()
+    block_matrices = pipeline.named_steps["block_kernels"].matrices_
+    flattener.fit(block_matrices)
+    block_matrices = flattener.transform(block_matrices)
+    preds = pipeline.named_steps["kmeans"].labels_
+    print(f"Processing: {preds.shape[0]} labels, {block_matrices.shape[0]} data points")
+
+    # (2) Calculate Calinski-Harabasz score
+    score = calinski_harabasz_score(block_matrices, preds)
+    return score
+
             
 # ------------------------------------------------------------
 ### Load data
@@ -459,6 +473,7 @@ pipeline_hybrid_blocks = Pipeline(
 ### Fit the models
 pipeline_hybrid_blocks.fit(X)
 riemannian_silhouette_score(pipeline_hybrid_blocks)
+calinski_harabasz_score(pipeline_hybrid_blocks)
 
 # ------------------------------------------------------------
 ### Grid search
@@ -518,8 +533,10 @@ for window_size in [x * upsampling_freq for x in params_window_size]:
                 )
                 pipeline_hybrid_blocks.fit(X)
                 scores.append(
-                    [window_size, shrinkage, kernel, n_clusters, riemannian_silhouette_score(pipeline_hybrid_blocks)])
-scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'n_Clusters', 'SilhouetteCoefficient'])
+                    [window_size, shrinkage, kernel, n_clusters, 
+                     riemannian_silhouette_score(pipeline_hybrid_blocks),
+                     calinski_harabasz_score(pipeline_hybrid_blocks)])
+scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'nClusters', 'SilhouetteCoefficient', 'CalinskiHarabaszScore'])
 
 # save results
 print("saving results")
