@@ -24,6 +24,7 @@ dyads = pd.read_csv(str(path + "dyadList.csv"))
 cutpoints = pd.read_excel(str(path + "cutpoints_videos.xlsx"))
 
 current_freq = 5
+verbosity = 40 #ERRORS and CRITICAL, but not WARNING, INFO, DEBUG
 
 all_dict = {}
 error_log = []
@@ -42,7 +43,7 @@ for file in os.listdir(inpath):
             continue
         
         # read data
-        data = mne.io.read_raw_fif(nirs_path)
+        data = mne.io.read_raw_fif(nirs_path, verbose=verbosity)
 
         # check channels
         chs = data.info['ch_names']
@@ -71,10 +72,11 @@ for file in os.listdir(inpath):
         epoch_list = []
         for annot in data.annotations:
             epoch = mne.Epochs(data,
-                           mne.events_from_annotations(data)[0][[0]],
+                           mne.events_from_annotations(data, verbose=verbosity)[0][[0]],
                            tmin = 0,
                            tmax = annot['duration'],
-                           baseline = None
+                           baseline = None,
+                           verbose=verbosity
                            )
             epoch_list.append(epoch)
 

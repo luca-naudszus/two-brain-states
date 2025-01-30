@@ -506,8 +506,8 @@ params_n_clusters = range(3, 8)
 #grid_search_hybrid_blocks.fit(X)
 
 # custom grid search
-#TODO: implement additional scores here: Calinski-Harabasz index, Davies-Bouldin index
-# and (somewhat more difficult) a comparison based on Fowlkes-Mallows indices or pair confusion matrices
+# We could implement additional scores here, e.g. David-Bouldin index, but this one is based on Euclidean distances. 
+# Another (somewhat more difficult) possibility is a comparison based on Fowlkes-Mallows indices or pair confusion matrices
 scores = []
 i = 0
 for window_size in [x * upsampling_freq for x in params_window_size]:
