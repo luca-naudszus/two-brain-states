@@ -41,19 +41,16 @@ cv_splits = 5 # number of cross-validation folds
 random_state = 42 # random state for reproducibility
 n_clusters = 5 # number of clusters for k-means
 max_iter = 5 # maximum number of iterations
-upsampling_freq = 100 # frequency to which the data have been upsampled
-window_length = 10 # virtual trial length in s
-window_size = upsampling_freq * window_length
-#TODO: max_iter probably needs to be much, much higher; change only when it runs on the cluster
+upsampling_freq = 5 # frequency to which the data have been upsampled
 
 # ------------------------------------------------------------
 # define custom classes and functions
 class WindowTransformer(BaseEstimator, TransformerMixin):
     """Splits the time series into non-overlapping windows of shape (n_channels, window_size). 
         Author: Luca Naudszus."""
-    #TODO: add a function to vary step size
-    def __init__(self, window_size=1000):
+    def __init__(self, window_size=upsampling_freq*10, step_size=None):
         self.window_size = window_size
+        self.step_size = step_size
 
     def fit(self, X, y=None):
         return self
@@ -63,17 +60,24 @@ class WindowTransformer(BaseEstimator, TransformerMixin):
         n_channels = X.shape[0]
         assert X.ndim == 2 and (n_channels in {8, 16}), "Unexpected input shape"
         n_samples = X.shape[1]
-        n_windows = n_samples // self.window_size
-        truncated_length = n_windows * self.window_size
-        X_windows = X[:, :truncated_length].reshape(n_channels, n_windows, self.window_size)
-        return np.transpose(X_windows, (1, 0, 2))
+        if self.step_size == None: 
+            n_windows = n_samples // self.window_size
+            truncated_length = n_windows * self.window_size
+            X_windows = X[:, :truncated_length].reshape(n_channels, n_windows, self.window_size)
+            return np.transpose(X_windows, (1, 0, 2))
+        else: 
+            n_windows = (n_samples - self.window_size) // self.step_size + 1
+            # Extract windows using a sliding approach
+            X_windows = np.lib.stride_tricks.sliding_window_view(X, (n_channels, self.window_size), axis=1)[:, :, ::self.step_size]
+            return np.transpose(X_windows, (2, 0, 1))
 
 class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
     """Transforms a list of time series into non-overlapping windows of shape (n_channels, window_size). 
         Author: Luca Naudszus."""
-    def __init__(self, window_size = 1000):
+    def __init__(self, window_size = upsampling_freq*10, step_size=None):
         self.window_size = window_size
-        self.base_transformer = WindowTransformer(window_size)
+        self.step_size = step_size
+        self.base_transformer = WindowTransformer(window_size, step_size)
 
     def fit(self, X, y=None):
         return self
@@ -347,18 +351,21 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
 class RiemannianKMeans(BaseEstimator, ClusterMixin):
     """Wrapper for pyriemann.clustering.KMeans (Lloyd's algorithm for Riemannian manifolds) for usage in GridSearchCV. 
         Author: Luca Naudszus."""
-    def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter):
+    def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter, n_init = 10):
         self.n_clusters = n_clusters
         self.n_jobs = n_jobs
         self.max_iter = max_iter
+        self.n_init = n_init
         self.metric = "riemann"
         self.kmeans = Kmeans(n_clusters=n_clusters, 
-        n_jobs = n_jobs, 
-        max_iter = max_iter,
-        metric = "riemann")
+            n_jobs = n_jobs, 
+            max_iter = max_iter,
+            n_init = n_init,
+            metric = "riemann")
+        
 
     def fit(self, X, y=None):
-        print(f"Fitting data with shape {X.shape}")
+        print(f"Fitting data with shape {X.shape}, using {self.n_init} random initializations")
         self.kmeans.fit(X)
         self.labels_ = self.kmeans.labels_
         return self
@@ -369,7 +376,7 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
 
     def fit_predict(self, X, y=None):
         return self.fit(X).labels_
-    
+
 def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_riemann): 
     # Calculates pairwise Affine-Invariant Riemannian Metric (distance_riemann). 
     # We could also use Bures-Wasserstein distance (distance_wasserstein), which is a lot faster, 
@@ -405,11 +412,11 @@ def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_rie
 # ------------------------------------------------------------
 ### Load data
 # Load the dataset
-npz = np.load('./data/ts_one_brain_t.npz')
+npz = np.load('./data/ts_two_blocks.npz')
 X = []
 for array in list(npz.files):
     X.append(npz[array])
-doc = pd.read_csv('./data/doc_one_brain_t.csv', index_col = 0)
+doc = pd.read_csv('./data/doc_two_blocks.csv', index_col = 0)
 conditions = [
     (doc['2'] == 0),
     (doc['2'] == 1) | (doc['2'] == 2),
@@ -429,11 +436,10 @@ print(
 ### Set up the pipeline
 
 # Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
-# This is the currently one of the best setups as evaluated by grid search below: 
 pipeline_hybrid_blocks = Pipeline(
     [
         ("windows", ListTimeSeriesWindowTransformer(
-            window_size = 1500
+            window_size = upsampling_freq*15
         )),
         ("block_kernels", HybridBlocks(block_size=block_size,
                                        shrinkage=0.3, 
@@ -441,10 +447,11 @@ pipeline_hybrid_blocks = Pipeline(
         )),
         ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
             n_clusters=3, 
-            max_iter=max_iter))
+            n_init = 10))
     ], verbose = True
 )
 
+#TODO: Understand how hybrid blocks works and accepts multiple parameters. 
 #TODO: Define other processing methods for blocks
 #TODO: Define non-Riemannian pipelines (for comparison)
 
@@ -456,20 +463,26 @@ riemannian_silhouette_score(pipeline_hybrid_blocks)
 # ------------------------------------------------------------
 ### Grid search
 
-# Define grid search
-param_grid_hybrid_blocks = {
-    'windows__window_size': [500, 1000, 1500],
-    'block_kernels__shrinkage': [0.01, 0.1, 0.2],
-    'block_kernels__metrics': ['cov', 'rbf', 'lwf', 'tyl', 'corr'],
-    'kmeans__n_clusters': range(3, 11)
-}
+# Define parameters
+params_window_size = [5, 10, 15] # virtual trial length in s
+params_shrinkage = [0.1, 0.2, 0.3, 0.4, 0.7]
+params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
+params_n_clusters = range(3, 8)
 
-grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
-                           param_grid_hybrid_blocks, 
-                           scoring=riemannian_silhouette_score, 
-                           n_jobs=n_jobs,
-                           verbose=10,
-                           error_score="raise")
+# Define grid search for GridSearchCV
+#param_grid_hybrid_blocks = {
+#    'windows__window_size': [x * upsampling_freq for x in params_window_size],
+#    'block_kernels__shrinkage': params_shrinkage,
+#    'block_kernels__metrics': params_kernel,
+#    'kmeans__n_clusters': params_n_clusters
+#}
+
+#grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
+#                           param_grid_hybrid_blocks, 
+#                           scoring=riemannian_silhouette_score, 
+#                           n_jobs=n_jobs,
+#                           verbose=10,
+#                           error_score="raise")
 
 # execute grid search 
 #TODO: Currently, this does not work because labels and data are not taken 
@@ -482,23 +495,24 @@ grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks,
 # and (somewhat more difficult) a comparison based on Fowlkes-Mallows indices or pair confusion matrices
 scores = []
 i = 0
-for window_size in [500, 1000, 1500]:
-    for shrinkage in [0.1, 0.2, 0.3, 0.4, 0.7]: 
-        for kernel in ['cov', 'rbf', 'lwf', 'tyl', 'corr']: 
-            for n_clusters in range(3, 8): 
+for window_size in [x * upsampling_freq for x in params_window_size]:
+    for shrinkage in params_shrinkage: 
+        for kernel in params_kernel: 
+            for n_clusters in params_n_clusters: 
                 i += 1
                 print(f"Iteration {i}, parameters: window size {window_size}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                 pipeline_hybrid_blocks = Pipeline(
                     [
                         ("windows", ListTimeSeriesWindowTransformer(
-                                        )),
+                                       window_size = window_size)),
                         ("block_kernels", HybridBlocks(block_size=block_size,
                                         shrinkage=shrinkage, 
                                         metrics=kernel
                                         )),
                         ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
                                         n_clusters=n_clusters, 
-                                        max_iter=max_iter
+                                        max_iter=max_iter, 
+                                        n_init = 10
                                         ))
                     ], verbose = True       
                 )
@@ -508,8 +522,6 @@ for window_size in [500, 1000, 1500]:
 scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'n_Clusters', 'SilhouetteCoefficient'])
 
 # save results
-#TODO: adjust this part for Euler compatibility
-#print("saving results")
-#timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-#results_hybrid_blocks = pd.DataFrame(grid_search_hybrid_blocks.cv_results_)
-#results_hybrid_blocks.to_csv(f"results/grid_search_hybrid_blocks_results_{timestamp}.csv", index=False)
+print("saving results")
+timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+scores.to_csv(f"results/grid_search_results_{timestamp}.csv", index=False)

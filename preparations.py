@@ -10,6 +10,7 @@ import mne
 import numpy as np
 import os
 import pandas as pd
+import re
 import scipy as sp
 
 path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data/"
@@ -19,12 +20,6 @@ inpath = str(path + "/preprocesseddata/")
 ### get list of true dyads
 dyads = pd.read_csv(str(path + "dyadList.csv"))
 
-### get list of best channels per ROI
-BESTchannels = pd.read_csv(str(path + "fNIRS_best_channels.csv"))
-BESTchannels.dropna(axis = 0, how = 'any', inplace = True)
-BESTchannels['session'] = BESTchannels['session'].astype(int)
-BESTchannels['ID'] = BESTchannels['ID'].astype(int)
-
 ### get list of activity durations (here extracted from video data)
 cutpoints = pd.read_excel(str(path + "cutpoints_videos.xlsx"))
 
@@ -33,66 +28,54 @@ current_freq = 5
 all_dict = {}
 error_log = []
 for file in os.listdir(inpath):
-    if (file.endswith(".fif") and not file.endswith("sbs-m03.fif")):
+    if file.endswith(".fif"):
 
         # get path and info
         nirs_path = str(inpath + file)
         pID = int(file[4:7])
         session_n = int(file[-9:-8])
 
-        # extract best channels, currently only using recording a
-        best_chs = BESTchannels.loc[(BESTchannels['ID'] == pID) &
-                                    (BESTchannels['session'] == session_n) &
-                                    (BESTchannels['recording'] == 'a')]
-        if best_chs.shape[0] != 4:
-            #TODO: Deal with recordings with missing ROIs
-            error_log.append((file[:-6], 'no channel for one or multiple ROIs'))
+        # test whether the recording has been broken
+        #TODO: deal with broken recordings, n = 12
+        if re.match(r"^.+_.{1}_pre\.fif$", file):
+            error_log.append((file[:-8], 'recording is broken'))
             continue
         
-        #TODO: find appropriate function to load the data
-        # (read_raw_fif produces the warning that this should be raw data)
+        # read data
         data = mne.io.read_raw_fif(nirs_path)
 
-        # select channels
-        chshbr = list(best_chs['channel'] + " hbr")
-        chshbo = list(best_chs['channel'] + " hbo")
-        keep_chs = chshbr + chshbo
-        if len(keep_chs) != len(set(keep_chs)):
-            #TODO: find out if this error occurs and if so why
-            error_log.append((file[:-8], 'duplicate best channels'))
+        # check channels
+        chs = data.info['ch_names']
+        assert len(chs) == len(set(chs)), f"Duplicate channels for {file[:-8]}"
+        assert len(chs) != 0, f"No channels for {file[:-8]}"
+        if len(chs) != 8: 
+            #TODO: deal with missing recordings, n = 232
+            error_log.append((file[:-8], 'no channel for one or multiple ROIs'))
             continue
-        if len(keep_chs) == 0:
-            #TODO: find out if this error occurs and if so why
-            error_log.append((file[:-8], 'no information on best channels'))
-            continue
-        if len(set(keep_chs) - set(data.info['ch_names'])) != 0:
-            #TODO: find out if this error occurs and if so why
-            error_log.append((file[:-8], 'best channels are non-existent'))
-            continue
-        data_good_chs = data.pick(keep_chs)
 
         # check whether there are enough onsets recorded
-        if len(data_good_chs.annotations) < 4:
-            error_log.append((file[:-6], 'no onsets'))
+        if len(data.annotations) < 4:
+            #TODO: find out why this error occurs, n = 2
+            error_log.append((file[:-8], 'no onsets'))
             continue
 
         # define durations of epochs
         for in_activity in range(0, 3):
-            data_good_chs.annotations.duration[
-                in_activity] = round(data_good_chs.annotations.onset[
-                in_activity + 1] - data_good_chs.annotations.onset[in_activity], 3)
-            data_good_chs.annotations.duration[3] = round(data_good_chs[
-            data_good_chs.ch_names[0]][1].max() - data_good_chs.annotations.onset[3], 3)
+            data.annotations.duration[
+                in_activity] = round(data.annotations.onset[
+                in_activity + 1] - data.annotations.onset[in_activity], 3)
+            data.annotations.duration[3] = round(data[
+            data.ch_names[0]][1].max() - data.annotations.onset[3], 3)
 
         # epoch data
         epoch_list = []
-        for annot in data_good_chs.annotations:
-            epoch = mne.Epochs(data_good_chs,
-                           mne.events_from_annotations(data_good_chs)[0][[0]],
+        for annot in data.annotations:
+            epoch = mne.Epochs(data,
+                           mne.events_from_annotations(data)[0][[0]],
                            tmin = 0,
                            tmax = annot['duration'],
-                           baseline = None,
-                           verbose = 'WARNING')
+                           baseline = None
+                           )
             epoch_list.append(epoch)
 
         # write into dictionary
@@ -119,6 +102,7 @@ for key in key_list:
     partner_key = f'sub-{partnerID}_session-{session_n}'
 
     if partner_key not in all_dict:
+        #TODO: Include target data also when partner is missing, when dealing with one brain data
         error_log.append((f'sub-{targetID}_session-{session_n}', 'partner data missing'))
         continue
 
@@ -165,7 +149,7 @@ for key in key_list:
             partner_interp = np.copy(partner_ts)
             duration_list.append(np.shape(target_interp)[1] / current_freq)
 
-        assert np.shape(target_interp)[1] == np.shape(partner_interp)[1], "Interpolation has not properly worked"
+        assert np.shape(target_interp)[1] == np.shape(partner_interp)[1], f"Interpolation for {targetID} has not properly worked"
 
         # Compare the interpolated duration with the true duration
         if in_epoch != len(target)-1:
@@ -255,9 +239,9 @@ doc_two_blocks = pd.DataFrame(doc_two_blocks)
 doc_four_blocks = pd.DataFrame(doc_four_blocks)
 
 # save
-doc_one_brain.to_csv(str(path + 'doc_one_brain_t.csv'))
-np.savez(str(path + 'ts_one_brain_t'), *ts_one_brain)
-doc_two_blocks.to_csv(str(path + 'doc_two_blocks_t.csv'))
-np.savez(str(path + 'ts_two_blocks_t'), *ts_two_blocks)
-doc_four_blocks.to_csv(str(path + 'doc_four_blocks_t.csv'))
-np.savez(str(path + 'ts_four_blocks_t'), *ts_four_blocks)
+doc_one_brain.to_csv(str(path + 'doc_one_brain.csv'))
+np.savez(str(path + 'ts_one_brain'), *ts_one_brain)
+doc_two_blocks.to_csv(str(path + 'doc_two_blocks.csv'))
+np.savez(str(path + 'ts_two_blocks'), *ts_two_blocks)
+doc_four_blocks.to_csv(str(path + 'doc_four_blocks.csv'))
+np.savez(str(path + 'ts_four_blocks'), *ts_four_blocks)
