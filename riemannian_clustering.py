@@ -6,6 +6,7 @@
 # import packages
 
 from datetime import datetime
+from itertools import combinations_with_replacement
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 import numpy as np
@@ -40,6 +41,7 @@ n_jobs = -1 # use all available cores
 cv_splits = 5 # number of cross-validation folds
 random_state = 42 # random state for reproducibility
 n_clusters = 5 # number of clusters for k-means
+n_init = 100 # number of initializations
 max_iter = 5 # maximum number of iterations
 upsampling_freq = 5 # frequency to which the data have been upsampled
 
@@ -351,7 +353,7 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
 class RiemannianKMeans(BaseEstimator, ClusterMixin):
     """Wrapper for pyriemann.clustering.KMeans (Lloyd's algorithm for Riemannian manifolds) for usage in GridSearchCV. 
         Author: Luca Naudszus."""
-    def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter, n_init = 10):
+    def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter, n_init = 100):
         self.n_clusters = n_clusters
         self.n_jobs = n_jobs
         self.max_iter = max_iter
@@ -437,6 +439,7 @@ conditions = [
     (doc['2'] == 3)]
 choices = ['alone', 'collab', 'diverse']
 y = np.select(conditions, choices, default='unknown')
+n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeseries
 
 # choose only drawing alone and collaborative drawing
 X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
@@ -461,11 +464,10 @@ pipeline_hybrid_blocks = Pipeline(
         )),
         ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
             n_clusters=3, 
-            n_init = 10))
+            n_init = 100))
     ], verbose = True
 )
 
-#TODO: Understand how hybrid blocks works and accepts multiple parameters. 
 #TODO: Define other processing methods for blocks
 #TODO: Define non-Riemannian pipelines (for comparison)
 
@@ -479,16 +481,23 @@ calinski_harabasz_score(pipeline_hybrid_blocks)
 ### Grid search
 
 # Define parameters
-params_window_size = [5, 10, 15] # virtual trial length in s
+params_window_length = [5, 10, 15] # virtual trial length in s
 params_shrinkage = [0.1, 0.2, 0.3, 0.4, 0.7]
 params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
 params_n_clusters = range(3, 8)
 
+# Compute grid search parameters from these inputs
+params_window_size = [x * upsampling_freq for x in params_window_length]
+comb_shrinkage = combinations_with_replacement(params_shrinkage, int(n_channels / block_size))
+params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
+comb_kernel = combinations_with_replacement(params_kernel, int(n_channels / block_size))
+params_kernel_combinations = [list(x) for x in comb_kernel]
+
 # Define grid search for GridSearchCV
 #param_grid_hybrid_blocks = {
-#    'windows__window_size': [x * upsampling_freq for x in params_window_size],
+#    'windows__window_size': params_window_size,
 #    'block_kernels__shrinkage': params_shrinkage,
-#    'block_kernels__metrics': params_kernel,
+#    'block_kernels__metrics': params_kernel_combinations,
 #    'kmeans__n_clusters': params_n_clusters
 #}
 
@@ -510,9 +519,9 @@ params_n_clusters = range(3, 8)
 # Another (somewhat more difficult) possibility is a comparison based on Fowlkes-Mallows indices or pair confusion matrices
 scores = []
 i = 0
-for window_size in [x * upsampling_freq for x in params_window_size]:
-    for shrinkage in params_shrinkage: 
-        for kernel in params_kernel: 
+for window_size in params_window_size:
+    for shrinkage in params_shrinkage_combinations: 
+        for kernel in params_kernel_combinations: 
             for n_clusters in params_n_clusters: 
                 i += 1
                 print(f"Iteration {i}, parameters: window size {window_size}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
@@ -527,7 +536,7 @@ for window_size in [x * upsampling_freq for x in params_window_size]:
                         ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
                                         n_clusters=n_clusters, 
                                         max_iter=max_iter, 
-                                        n_init = 10
+                                        n_init = n_init,
                                         ))
                     ], verbose = True       
                 )
