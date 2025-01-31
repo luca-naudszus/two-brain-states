@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.linalg import block_diag
 import pandas as pd
+import sklearn
 from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
 from sklearn.model_selection import StratifiedKFold
 from sklearn.compose import ColumnTransformer
@@ -20,8 +21,8 @@ from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
+import pyriemann
 from pyriemann.classification import SVC
-from pyriemann.clustering import Kmeans
 from pyriemann.estimation import (
     BlockCovariances, 
     Covariances,
@@ -351,7 +352,7 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
         return pd.DataFrame(data_dict)
 
 class RiemannianKMeans(BaseEstimator, ClusterMixin):
-    """Wrapper for pyriemann.clustering.KMeans (Lloyd's algorithm for Riemannian manifolds) for usage in GridSearchCV. 
+    """Wrapper for pyriemann.clustering.KMeans for usage in GridSearchCV. 
         Author: Luca Naudszus."""
     def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter, n_init = 100):
         self.n_clusters = n_clusters
@@ -359,7 +360,7 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
         self.max_iter = max_iter
         self.n_init = n_init
         self.metric = "riemann"
-        self.kmeans = Kmeans(n_clusters=n_clusters, 
+        self.kmeans = pyriemann.clustering.Kmeans(n_clusters=n_clusters, 
             n_jobs = n_jobs, 
             max_iter = max_iter,
             n_init = n_init,
@@ -380,46 +381,63 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
         return self.fit(X).labels_
 
 def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_riemann): 
-    # Calculates pairwise Affine-Invariant Riemannian Metric (distance_riemann). 
+    """Calculates Silhouette Coefficient based on pairwise Affine-Invariant Riemannian Metric on randomly chosen matrices.""" 
     # We could also use Bures-Wasserstein distance (distance_wasserstein), which is a lot faster, 
     # but not what is used in the actual Lloyd's algorithm as implemented above. 
 
     # (1) Extract matrices
     block_matrices = pipeline.named_steps["block_kernels"].matrices_
-    preds = pipeline.named_steps["kmeans"].labels_
-    n_matrices = block_matrices.shape[0]
-    print(f"Processing: {preds.shape[0]} labels, {n_matrices} data points")
+    labels = pipeline.named_steps["kmeans"].labels_
+
+    # (2) Stratified sampling
+    #random_idx = np.random.choice(range(block_matrices.shape[0]), block_matrices.shape[0]/10, replace=False)
+    #sampled_matrices = block_matrices[random_idx]
+    #sampled_labels = labels[random_idx]
+    #n_matrices = sampled_matrices.shape[0]
     
-    # (2) Parallel execution of distance calculation
+    df = pd.DataFrame({'index': np.arange(len(block_matrices)), 'cluster': labels})
+    # sample 10% from each cluster
+    stratified_subset = (   
+        df.groupby('cluster', group_keys=False)
+        .apply(lambda x: x.sample(frac=0.1, random_state=42))
+        .reset_index(drop=True)
+    )
+    stratified_indices = stratified_subset['index'].values  # Remove cluster column
+    stratified_matrices = block_matrices[stratified_indices]
+    stratified_labels = labels[stratified_indices]
+    n_matrices = len(stratified_matrices)
+
+    print(f"Processing: stratified sample of {n_matrices} data points")
+    
+    # (3) Parallel execution of distance calculation
     def compute_distance(i, j, matrices, distance):
         if j == 0:
             print(f"Processing i = {i} (outer loop)")
         return distance(matrices[i], matrices[j])
 
     pairwise_distances = Parallel(n_jobs=n_jobs)(
-        delayed(compute_distance)(i, j, block_matrices, distance)
+        delayed(compute_distance)(i, j, stratified_matrices, distance)
         for i in range(n_matrices) for j in range(i+1, n_matrices)
     )
     
-    # (3) Convert list into full distance matrix
+    # (4) Convert list into full distance matrix
     pairwise_distances_matrix = np.zeros((n_matrices, n_matrices))
     idx = np.triu_indices(n_matrices, 1)
     pairwise_distances_matrix[idx] = pairwise_distances
     pairwise_distances_matrix += pairwise_distances_matrix.T
 
-    # (4) Calculate silhouette score
-    score = silhouette_score(pairwise_distances_matrix, preds, metric='precomputed')
+    # (5) Calculate silhouette score
+    score = silhouette_score(pairwise_distances_matrix, stratified_labels, metric='precomputed')
     return score
 
-def calinski_harabasz_score(pipeline):
+def ch_score(pipeline):
     # (1) Extract and transform matrices
     flattener = FlattenTransformer()
     block_matrices = pipeline.named_steps["block_kernels"].matrices_
     flattener.fit(block_matrices)
     block_matrices = flattener.transform(block_matrices)
     preds = pipeline.named_steps["kmeans"].labels_
-    print(f"Processing: {preds.shape[0]} labels, {block_matrices.shape[0]} data points")
-
+    
     # (2) Calculate Calinski-Harabasz score
     score = calinski_harabasz_score(block_matrices, preds)
     return score
@@ -453,37 +471,54 @@ print(
 ### Set up the pipeline
 
 # Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
-pipeline_hybrid_blocks = Pipeline(
+pipeline_Riemannian = Pipeline(
     [
         ("windows", ListTimeSeriesWindowTransformer(
             window_size = upsampling_freq*15
         )),
         ("block_kernels", HybridBlocks(block_size=block_size,
-                                       shrinkage=0.3, 
-                                       metrics="rbf"
+                                       shrinkage=0.1, 
+                                       metrics="cov"
         )),
         ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
             n_clusters=3, 
-            n_init = 100))
+            n_init = 10))
     ], verbose = True
 )
 
-#TODO: Define other processing methods for blocks
-#TODO: Define non-Riemannian pipelines (for comparison)
+# For comparison: Define the pipeline with HybridBlocks and non-Riemannian Lloyd's algorithm
+pipeline_nonRiemannian = Pipeline(
+    [
+        ("windows", ListTimeSeriesWindowTransformer(
+            window_size = upsampling_freq*5
+        )),
+        ("block_kernels", HybridBlocks(block_size=block_size,
+                                       shrinkage=0.1, 
+                                       metrics="cov"
+        )),
+        ("flattener", FlattenTransformer()),
+        ("kmeans", sklearn.cluster.KMeans(
+            n_clusters=3, 
+            n_init = 10))
+    ], verbose = True
+)
 
 # ------------------------------------------------------------
 ### Fit the models
-pipeline_hybrid_blocks.fit(X)
-riemannian_silhouette_score(pipeline_hybrid_blocks)
-calinski_harabasz_score(pipeline_hybrid_blocks)
+pipeline_Riemannian.fit(X)
+print(f"Silhouette Score: {riemannian_silhouette_score(pipeline_Riemannian)}")
+print(f"Calinski-Harabasz Score: {ch_score(pipeline_Riemannian)}")
+pipeline_nonRiemannian.fit(X)
+print(f"Silhouette Score: {riemannian_silhouette_score(pipeline_nonRiemannian)}")
+print(f"Calinski-Harabasz Score: {ch_score(pipeline_nonRiemannian)}")
 
 # ------------------------------------------------------------
 ### Grid search
 
 # Define parameters
-params_window_length = [5, 10, 15] # virtual trial length in s
-params_shrinkage = [0.1, 0.2, 0.3, 0.4, 0.7]
-params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
+params_window_length = [10, 15] # virtual trial length in s
+params_shrinkage = [0.1, 0.3, 0.7]
+params_kernel = ['cov', 'rbf'] #, 'lwf', 'tyl', 'corr']
 params_n_clusters = range(3, 8)
 
 # Compute grid search parameters from these inputs
@@ -524,7 +559,7 @@ for window_size in params_window_size:
         for kernel in params_kernel_combinations: 
             for n_clusters in params_n_clusters: 
                 i += 1
-                print(f"Iteration {i}, parameters: window size {window_size}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
+                print(f"Iteration {i}, parameters: window length {window_size/upsampling_freq}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                 pipeline_hybrid_blocks = Pipeline(
                     [
                         ("windows", ListTimeSeriesWindowTransformer(
@@ -536,16 +571,18 @@ for window_size in params_window_size:
                         ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
                                         n_clusters=n_clusters, 
                                         max_iter=max_iter, 
-                                        n_init = n_init,
+                                        n_init = 10,
                                         ))
                     ], verbose = True       
                 )
                 pipeline_hybrid_blocks.fit(X)
                 scores.append(
                     [window_size, shrinkage, kernel, n_clusters, 
-                     riemannian_silhouette_score(pipeline_hybrid_blocks),
-                     calinski_harabasz_score(pipeline_hybrid_blocks)])
-scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'nClusters', 'SilhouetteCoefficient', 'CalinskiHarabaszScore'])
+ #                    riemannian_silhouette_score(pipeline_hybrid_blocks),
+                     ch_score(pipeline_hybrid_blocks)])
+scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'nClusters', 
+#                                       'SilhouetteCoefficient', 
+                                       'CalinskiHarabaszScore'])
 
 # save results
 print("saving results")
