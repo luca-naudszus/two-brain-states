@@ -503,9 +503,9 @@ params_n_clusters = range(3, 8)
 
 # Compute grid search parameters from these inputs
 params_window_size = [x * upsampling_freq for x in params_window_length]
-comb_shrinkage = product(params_shrinkage, int(n_channels / block_size))
+comb_shrinkage = product(params_shrinkage, repeat=int(n_channels / block_size))
 params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
-comb_kernel = product(params_kernel, int(n_channels / block_size))
+comb_kernel = product(params_kernel, repeat=int(n_channels / block_size))
 params_kernel_combinations = [list(x) for x in comb_kernel]
 
 # Define grid search for GridSearchCV
