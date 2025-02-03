@@ -14,7 +14,7 @@ from scipy.linalg import block_diag
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.model_selection import StratifiedKFold
-from sklearn.compose import ColumnTransformer
+from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
 from sklearn.utils.validation import check_is_fitted
 from sklearn.pipeline import FunctionTransformer, Pipeline, make_pipeline
 from sklearn.model_selection import cross_val_score
@@ -70,27 +70,17 @@ class WindowTransformer(BaseEstimator, TransformerMixin):
             X_windows = np.lib.stride_tricks.sliding_window_view(X, (n_channels, self.window_size), axis=1)[:, :, ::self.step_size]
             return np.transpose(X_windows, (2, 0, 1))
         
-    def transform_labels(self, y):
-        """Adjust labels to match the windowed data."""
-        # Convert y to np.ndarray if it's a numpy string type
-        if isinstance(y, np.ndarray) and y.dtype == np.str_:
-            y = y.astype(str)  # Convert to a string array if needed
-
-        # Ensure y is a numpy array (converting from list if necessary)
-        if isinstance(y, list):  
-            y = np.array(y)
-
-        # Handle the conversion of labels into the expected format (e.g., numeric)
-        if y.dtype.kind in 'SU':  # If y contains strings, map to numeric or categories
-            from sklearn.preprocessing import LabelEncoder
-            le = LabelEncoder()
-            y = le.fit_transform(y)
-
-        if self.step_size is None:
-            n_windows = len(y) // self.window_size
-            return y[: n_windows * self.window_size : self.window_size]
-        else:
-            return y[: len(y) - self.window_size + 1 : self.step_size]
+    def transform_labels(self, X, y): 
+        assert isinstance(X, np.ndarray), "Input must be a NumPy array"
+        n_channels = X.shape[0]
+        assert X.ndim == 2 and (n_channels in {8, 16}), "Unexpected input shape"
+        n_samples = X.shape[1]
+        if self.step_size == None: 
+            n_windows = n_samples // self.window_size
+        else: 
+            n_windows = (n_samples - self.window_size) // self.step_size + 1
+        y = n_windows * [y]
+        return y
         
 class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
     """Transforms a list of time series into non-overlapping windows of shape (n_channels, window_size). 
@@ -107,17 +97,11 @@ class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
         assert isinstance(X, list), "Input must be a list of NumPy arrays"
         transformed_X = [self.base_transformer.transform(x) for x in X]
         return np.concatenate(transformed_X, axis=0)
-        
-    def fit_transform(self, X, y=None):
-        """Ensures y is transformed along with X."""
-        transformed_X = self.transform(X)
-        
-        if y is not None:
-            transformed_y = [self.transform_labels(yi) for yi in y]
-            transformed_y = np.concatenate(transformed_y, axis=0)
-            return transformed_X, transformed_y
-
-        return transformed_X
+    
+    def transform_labels(self, X, y):
+        """Adjust labels to match the windowed data."""
+        transformed_y = [self.base_transformer.transform_labels(x, y_i) for x, y_i in zip(X, y)]
+        return np.concatenate(transformed_y, axis = 0)
 
 class Stacker(TransformerMixin):
     """Stacks values of a DataFrame column into a 3D array."""
@@ -394,8 +378,9 @@ y = np.select(conditions, choices, default='unknown')
 n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeseries
 
 # choose only drawing alone and collaborative drawing
-X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
-y = y[y != 'diverse']
+#X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
+#y = y[y != 'diverse']
+unique_strings, y = np.unique(y, return_inverse=True)
 
 print(
     f"Data loaded: {len(X)} trials, {X[0].shape[0]} channels"
@@ -404,20 +389,19 @@ print(
 # ------------------------------------------------------------
 ### Set up the pipeline
 
-# Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
+# Prepare data 
+window_transformer = ListTimeSeriesWindowTransformer(window_size=upsampling_freq*10)
+y = window_transformer.transform_labels(X, y)
+X = window_transformer.fit_transform(X)
+
+# Define the pipeline with HybridBlocks and Support Vector Classifier
 pipeline_Riemannian = Pipeline(
     [
-        ("windows", ListTimeSeriesWindowTransformer(window_size=upsampling_freq*15)),
-        ("block_kernels", HybridBlocks(block_size=block_size, shrinkage=0.1, metrics="cov")),
-        ("kmeans", SVC(metric="riemann", C=1))
+        ("block_kernels", HybridBlocks(block_size=block_size, shrinkage=1, metrics="cov")),
+        ("classifier", SVC(metric="riemann", C=1))
     ], verbose=True
 )
 
-# Wrap the pipeline so labels are transformed automatically
-pipeline_Riemannian = TransformedTargetClassifier2(
-    classifier=pipeline_Riemannian,
-    transformer=FunctionTransformer(lambda y: np.concatenate([WindowTransformer.transform_labels(y_i) for y_i in y]))
-)
 # ------------------------------------------------------------
 ### Fit the models
 # Define cross-validation
@@ -438,27 +422,28 @@ cv_scores_hybrid_blocks = cross_val_score(
 ### Grid search
 
 # Define grid search
-#param_grid_hybrid_blocks = {
-#    'block_kernels__shrinkage': [0, 0.01, 0.1],
-#    'block_kernels__metrics': ['cov', 'rbf', 'lwf', 'tyl', 'corr'],
-#    'classifier__C': [0.1, 1, 2],       # Regularization parameter
-#    'classifier__metric': ['riemann']
-#}
+param_grid_hybrid_blocks = {
+    'block_kernels__shrinkage': [0.1, 0.3, 0.7],
+    'block_kernels__metrics': ['cov', 'rbf', 'lwf', 'tyl', 'corr'],
+    'classifier__C': [0.1, 1, 10],       # Regularization parameter
+    'classifier__metric': ['riemann']
+}
 
 #param_grid_blockcovariances = {
 #    'classifier__C': [0.1, 1, 10],       # Regularization parameter
 #    'shrinkage__shrinkage': [0.01, 0.1]
 #}
-#grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
-#                           param_grid_hybrid_blocks, 
-#                           cv=cv, 
-#                           scoring='accuracy', 
-#                           n_jobs=n_jobs,
-#                           verbose=10)
+
+grid_search_hybrid_blocks = GridSearchCV(pipeline_Riemannian, 
+                           param_grid_hybrid_blocks, 
+                           cv=cv, 
+                           scoring='accuracy', 
+                           n_jobs=n_jobs,
+                           verbose=10)
 
 # execute grid search
-#print("executing grid search")
-#grid_search_hybrid_blocks.fit(X, y)
+print("executing grid search")
+grid_search_hybrid_blocks.fit(X, y)
 ##grid_search_blockcovariances.fit(X, y)
 #print("collecting garbage")
 #gc.collect()

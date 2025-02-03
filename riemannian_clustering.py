@@ -497,8 +497,8 @@ print(f"Calinski-Harabasz Score: {ch_score(pipeline_Riemannian)}")
 
 # Define parameters
 params_window_length = [15] # virtual trial length in s
-params_shrinkage = [0.3, 0.7]
-params_kernel = ['cov', 'rbf'] #, 'lwf', 'tyl', 'corr']
+params_shrinkage = [0.1, 0.3, 0.7]
+params_kernel = ['cov', 'rbf', 'lwf', 'tyl'] #, 'corr']
 params_n_clusters = range(3, 8)
 
 # Compute grid search parameters from these inputs

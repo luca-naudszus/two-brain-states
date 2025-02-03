@@ -258,7 +258,7 @@ for i, row in dyads.iterrows():
                 target_ts = target_list[activity]
                 # first, one brain data (two blocks: HbO + HbR)
                 ts_one_brain.append(target_ts)
-                doc_one_brain.extend([row['pID1'], session, activity])
+                doc_one_brain.extend([[row['pID1'], session, activity]])
 
             partner_key = f"sub-{row['pID2']}_session-{session + 1}"
             if partner_key in key_list: 
