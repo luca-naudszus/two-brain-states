@@ -16,7 +16,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.model_selection import StratifiedKFold
 from sklearn.compose import ColumnTransformer
 from sklearn.utils.validation import check_is_fitted
-from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.pipeline import FunctionTransformer, Pipeline, make_pipeline
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import GridSearchCV
 from pyriemann.classification import SVC
@@ -31,14 +31,93 @@ ker_est_functions = [
 ]
 from pyriemann.utils.covariance import cov_est_functions
 
-with warnings.catch_warnings():
-    warnings.simplefilter(action="ignore", category=FutureWarning)
-
+# ------------------------------------------------------------
+# define constant values
 block_size = 4 # number of channels for HbO and HbR
-n_jobs = 1 # use all available cores
+n_jobs = -1 # use all available cores
 cv_splits = 5 # number of cross-validation folds
 random_state = 42 # random state for reproducibility
+n_clusters = 5 # number of clusters for k-means
+n_init = 100 # number of initializations
+max_iter = 5 # maximum number of iterations
+upsampling_freq = 5 # frequency to which the data have been upsampled
 
+# ------------------------------------------------------------
+# define custom classes and functions
+class WindowTransformer(BaseEstimator, TransformerMixin):
+    """Splits the time series into non-overlapping windows of shape (n_channels, window_size). 
+        Author: Luca Naudszus."""
+    def __init__(self, window_size=upsampling_freq*10, step_size=None):
+        self.window_size = window_size
+        self.step_size = step_size
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        assert isinstance(X, np.ndarray), "Input must be a NumPy array"
+        n_channels = X.shape[0]
+        assert X.ndim == 2 and (n_channels in {8, 16}), "Unexpected input shape"
+        n_samples = X.shape[1]
+        if self.step_size == None: 
+            n_windows = n_samples // self.window_size
+            truncated_length = n_windows * self.window_size
+            X_windows = X[:, :truncated_length].reshape(n_channels, n_windows, self.window_size)
+            return np.transpose(X_windows, (1, 0, 2))
+        else: 
+            n_windows = (n_samples - self.window_size) // self.step_size + 1
+            # Extract windows using a sliding approach
+            X_windows = np.lib.stride_tricks.sliding_window_view(X, (n_channels, self.window_size), axis=1)[:, :, ::self.step_size]
+            return np.transpose(X_windows, (2, 0, 1))
+        
+    def transform_labels(self, y):
+        """Adjust labels to match the windowed data."""
+        # Convert y to np.ndarray if it's a numpy string type
+        if isinstance(y, np.ndarray) and y.dtype == np.str_:
+            y = y.astype(str)  # Convert to a string array if needed
+
+        # Ensure y is a numpy array (converting from list if necessary)
+        if isinstance(y, list):  
+            y = np.array(y)
+
+        # Handle the conversion of labels into the expected format (e.g., numeric)
+        if y.dtype.kind in 'SU':  # If y contains strings, map to numeric or categories
+            from sklearn.preprocessing import LabelEncoder
+            le = LabelEncoder()
+            y = le.fit_transform(y)
+
+        if self.step_size is None:
+            n_windows = len(y) // self.window_size
+            return y[: n_windows * self.window_size : self.window_size]
+        else:
+            return y[: len(y) - self.window_size + 1 : self.step_size]
+        
+class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
+    """Transforms a list of time series into non-overlapping windows of shape (n_channels, window_size). 
+        Author: Luca Naudszus."""
+    def __init__(self, window_size = upsampling_freq*10, step_size=None):
+        self.window_size = window_size
+        self.step_size = step_size
+        self.base_transformer = WindowTransformer(window_size, step_size)
+
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X):
+        assert isinstance(X, list), "Input must be a list of NumPy arrays"
+        transformed_X = [self.base_transformer.transform(x) for x in X]
+        return np.concatenate(transformed_X, axis=0)
+        
+    def fit_transform(self, X, y=None):
+        """Ensures y is transformed along with X."""
+        transformed_X = self.transform(X)
+        
+        if y is not None:
+            transformed_y = [self.transform_labels(yi) for yi in y]
+            transformed_y = np.concatenate(transformed_y, axis=0)
+            return transformed_X, transformed_y
+
+        return transformed_X
 
 class Stacker(TransformerMixin):
     """Stacks values of a DataFrame column into a 3D array."""
@@ -298,76 +377,49 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
             data_dict[self.block_names[i]] = list(X[:, start:end, :])
         return pd.DataFrame(data_dict)
 
+# ------------------------------------------------------------
 ### Load data
 # Load the dataset
-X = np.load('./data/matrix_two_blocks_t.npy')
-doc = pd.read_csv('./data/doc_two_blocks_t.csv', index_col = 0)
+npz = np.load('./data/ts_two_blocks.npz')
+X = []
+for array in list(npz.files):
+    X.append(npz[array])
+doc = pd.read_csv('./data/doc_two_blocks.csv', index_col = 0)
 conditions = [
     (doc['2'] == 0),
     (doc['2'] == 1) | (doc['2'] == 2),
     (doc['2'] == 3)]
 choices = ['alone', 'collab', 'diverse']
 y = np.select(conditions, choices, default='unknown')
+n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeseries
+
+# choose only drawing alone and collaborative drawing
+X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
+y = y[y != 'diverse']
 
 print(
-    f"Data loaded: {X.shape[0]} trials, {X.shape[1]} channels, "
-    f"{X.shape[2]} time points"
+    f"Data loaded: {len(X)} trials, {X[0].shape[0]} channels"
 )
 
-# Get trials with the label "collab" for "collaboration"
-MT_label = "collab"
-MT_trials_indices = np.where(y == MT_label)[0]
-
-# Average the data across the "collab" trials
-X_MT_erp = np.mean(X[MT_trials_indices, :, :], axis=0)
-
-# select example channel
-channel_index = 2
-
-# Plot the averaged signals
-# plt.figure(figsize=(10, 5))
-# plt.plot(X_MT_erp[channel_index, :], label="HbO P1", color="red")
-# plt.plot(X_MT_erp[channel_index + 4, :], label="HbR P1", color="darkred")
-# plt.plot(X_MT_erp[channel_index + 8, :], label="HbO P2", color="blue")
-# plt.plot(X_MT_erp[channel_index + 12, :], label="HbR P2", color="darkblue")
-# plt.xlabel("Time samples")
-# plt.ylabel("Signal Amplitude")
-# plt.title(f"ERP for collaboration trials in channel {channel_index}")
-# plt.legend()
-# plt.show()
-
+# ------------------------------------------------------------
 ### Set up the pipeline
 
-# Define the pipeline with HybridBlocks and SVC classifier
-pipeline_hybrid_blocks = Pipeline(
+# Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
+pipeline_Riemannian = Pipeline(
     [
-        ("block_kernels", HybridBlocks(block_size=block_size)),
-#        ("classifier", SVC(metric="riemann", C=1)),
-        ("classifier", SVC())
-    ]
+        ("windows", ListTimeSeriesWindowTransformer(window_size=upsampling_freq*15)),
+        ("block_kernels", HybridBlocks(block_size=block_size, shrinkage=0.1, metrics="cov")),
+        ("kmeans", SVC(metric="riemann", C=1))
+    ], verbose=True
 )
 
-# Define the pipeline with BlockCovariances and SVC classifier
-#pipeline_blockcovariances = Pipeline(
-#    [
-#        ("covariances", BlockCovariances(block_size=block_size)),
-#        ('shrinkage', Shrinkage()),
-#        ("classifier", SVC(metric="riemann", C=1)),
-#        ("classifier", SVC(metric="riemann"))
-#    ]
-#)
-
-# Define the hyperparameters for fitting
-#pipeline_hybrid_blocks.set_params(
-#    block_kernels__shrinkage=[0.02, 0.02], 
-#    block_kernels__metrics= ['cov', 'rbf']
-#    )
-
-#pipeline_blockcovariances.set_params(
-#    covariances__estimator='lwf',
-#   shrinkage__shrinkage=0.0001
-#    )
-
+# Wrap the pipeline so labels are transformed automatically
+pipeline_Riemannian = TransformedTargetClassifier2(
+    classifier=pipeline_Riemannian,
+    transformer=FunctionTransformer(lambda y: np.concatenate([WindowTransformer.transform_labels(y_i) for y_i in y]))
+)
+# ------------------------------------------------------------
+### Fit the models
 # Define cross-validation
 cv = StratifiedKFold(
     n_splits=cv_splits,
@@ -375,69 +427,46 @@ cv = StratifiedKFold(
     shuffle=True
     )
 
-### Fit the two models
-#cv_scores_hybrid_blocks = cross_val_score(
-#    pipeline_hybrid_blocks, X, y,
-#    cv=cv, scoring="accuracy", n_jobs=n_jobs
-#    )
+cv_scores_hybrid_blocks = cross_val_score(
+    pipeline_Riemannian, X, y,
+    cv=cv, scoring="accuracy", n_jobs=n_jobs
+    )
 
-#cv_scores_blockcovariances = cross_val_score(
-#    pipeline_blockcovariances, X, y,
-#    cv=cv, scoring="accuracy", n_jobs=n_jobs)
+### Set up the pipeline
 
-### Print and plot results
-#acc_hybrid_blocks = np.mean(cv_scores_hybrid_blocks)
-#acc_blockcovariances = np.mean(cv_scores_blockcovariances)
-
-#print(f"Mean accuracy for HybridBlocks: {acc_hybrid_blocks:.2f}")
-#print(f"Mean accuracy for BlockCovariances: {acc_blockcovariances:.2f}")
-
-# plot a scatter plot of CV and median scores
-#plt.figure(figsize=(6, 6))
-#plt.scatter(cv_scores_hybrid_blocks, cv_scores_blockcovariances)
-#plt.plot([0.4, 1], [0.4, 1], "--", color="black")
-#plt.xlabel("Accuracy HybridBlocks")
-#plt.ylabel("Accuracy BlockCovariances")
-#plt.title("Comparison of HybridBlocks and Covariances")
-#plt.legend(["CV Fold Scores"])
-#plt.show()
+# ------------------------------------------------------------
+### Grid search
 
 # Define grid search
-param_grid_hybrid_blocks = {
-    'block_kernels__shrinkage': [0, 0.01, 0.1],
-    'block_kernels__metrics': ['cov', 'rbf', 'lwf', 'tyl', 'corr'],
-    'classifier__C': [0.1, 1, 2],       # Regularization parameter
-    'classifier__metric': ['riemann']
-}
+#param_grid_hybrid_blocks = {
+#    'block_kernels__shrinkage': [0, 0.01, 0.1],
+#    'block_kernels__metrics': ['cov', 'rbf', 'lwf', 'tyl', 'corr'],
+#    'classifier__C': [0.1, 1, 2],       # Regularization parameter
+#    'classifier__metric': ['riemann']
+#}
 
 #param_grid_blockcovariances = {
 #    'classifier__C': [0.1, 1, 10],       # Regularization parameter
 #    'shrinkage__shrinkage': [0.01, 0.1]
 #}
-grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
-                           param_grid_hybrid_blocks, 
-                           cv=cv, 
-                           scoring='accuracy', 
-                           n_jobs=n_jobs,
-                           verbose=10)
-
-#grid_search_blockcovariances = GridSearchCV(pipeline_blockcovariances, 
-#                           param_grid_blockcovariances, 
+#grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
+#                           param_grid_hybrid_blocks, 
 #                           cv=cv, 
 #                           scoring='accuracy', 
-#                           n_jobs=n_jobs)
+#                           n_jobs=n_jobs,
+#                           verbose=10)
 
 # execute grid search
-print("executing grid search")
-grid_search_hybrid_blocks.fit(X, y)
-#grid_search_blockcovariances.fit(X, y)
-print("collecting garbage")
-gc.collect()
+#print("executing grid search")
+#grid_search_hybrid_blocks.fit(X, y)
+##grid_search_blockcovariances.fit(X, y)
+#print("collecting garbage")
+#gc.collect()
 
 # save results
-print("saving results")
-timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-results_hybrid_blocks = pd.DataFrame(grid_search_hybrid_blocks.cv_results_)
-results_hybrid_blocks.to_csv(f"results/grid_search_hybrid_blocks_results_{timestamp}.csv", index=False)
+#print("saving results")
+#timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+#results_hybrid_blocks = pd.DataFrame(grid_search_hybrid_blocks.cv_results_)
+#results_hybrid_blocks.to_csv(f"results/grid_search_hybrid_blocks_results_{timestamp}.csv", index=False)
 #results_blockcovariances = pd.DataFrame(grid_search_blockcovariances.cv_results_)
 #results_blockcovariances.to_csv("grid_search_blockcovariances_results.csv", index=False)

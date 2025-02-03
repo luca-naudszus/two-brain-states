@@ -6,7 +6,7 @@
 # import packages
 
 from datetime import datetime
-from itertools import combinations_with_replacement
+from itertools import product
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 import numpy as np
@@ -399,7 +399,7 @@ def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_rie
     # sample 10% from each cluster
     stratified_subset = (   
         df.groupby('cluster', group_keys=False)
-        .apply(lambda x: x.sample(frac=0.1, random_state=42))
+        .apply(lambda x: x.sample(frac=0.1, random_state=42), include_groups=False)
         .reset_index(drop=True)
     )
     stratified_indices = stratified_subset['index'].values  # Remove cluster column
@@ -486,46 +486,26 @@ pipeline_Riemannian = Pipeline(
     ], verbose = True
 )
 
-# For comparison: Define the pipeline with HybridBlocks and non-Riemannian Lloyd's algorithm
-pipeline_nonRiemannian = Pipeline(
-    [
-        ("windows", ListTimeSeriesWindowTransformer(
-            window_size = upsampling_freq*5
-        )),
-        ("block_kernels", HybridBlocks(block_size=block_size,
-                                       shrinkage=0.1, 
-                                       metrics="cov"
-        )),
-        ("flattener", FlattenTransformer()),
-        ("kmeans", sklearn.cluster.KMeans(
-            n_clusters=3, 
-            n_init = 10))
-    ], verbose = True
-)
-
 # ------------------------------------------------------------
 ### Fit the models
 pipeline_Riemannian.fit(X)
 print(f"Silhouette Score: {riemannian_silhouette_score(pipeline_Riemannian)}")
 print(f"Calinski-Harabasz Score: {ch_score(pipeline_Riemannian)}")
-pipeline_nonRiemannian.fit(X)
-print(f"Silhouette Score: {riemannian_silhouette_score(pipeline_nonRiemannian)}")
-print(f"Calinski-Harabasz Score: {ch_score(pipeline_nonRiemannian)}")
 
 # ------------------------------------------------------------
 ### Grid search
 
 # Define parameters
-params_window_length = [10, 15] # virtual trial length in s
-params_shrinkage = [0.1, 0.3, 0.7]
+params_window_length = [15] # virtual trial length in s
+params_shrinkage = [0.3, 0.7]
 params_kernel = ['cov', 'rbf'] #, 'lwf', 'tyl', 'corr']
 params_n_clusters = range(3, 8)
 
 # Compute grid search parameters from these inputs
 params_window_size = [x * upsampling_freq for x in params_window_length]
-comb_shrinkage = combinations_with_replacement(params_shrinkage, int(n_channels / block_size))
+comb_shrinkage = product(params_shrinkage, int(n_channels / block_size))
 params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
-comb_kernel = combinations_with_replacement(params_kernel, int(n_channels / block_size))
+comb_kernel = product(params_kernel, int(n_channels / block_size))
 params_kernel_combinations = [list(x) for x in comb_kernel]
 
 # Define grid search for GridSearchCV
@@ -578,10 +558,10 @@ for window_size in params_window_size:
                 pipeline_hybrid_blocks.fit(X)
                 scores.append(
                     [window_size, shrinkage, kernel, n_clusters, 
- #                    riemannian_silhouette_score(pipeline_hybrid_blocks),
+                     riemannian_silhouette_score(pipeline_hybrid_blocks),
                      ch_score(pipeline_hybrid_blocks)])
 scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'nClusters', 
-#                                       'SilhouetteCoefficient', 
+                                       'SilhouetteCoefficient', 
                                        'CalinskiHarabaszScore'])
 
 # save results
