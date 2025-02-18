@@ -11,6 +11,7 @@ from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.linalg import block_diag
+import sys
 import pandas as pd
 import sklearn
 from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
@@ -21,6 +22,9 @@ from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
+from pyriemann.utils.mean import mean_riemann
+from pyriemann.utils.tangentspace import tangent_space
+from sklearn.decomposition import PCA
 import pyriemann
 from pyriemann.classification import SVC
 from pyriemann.estimation import (
@@ -71,8 +75,8 @@ class WindowTransformer(BaseEstimator, TransformerMixin):
         else: 
             n_windows = (n_samples - self.window_size) // self.step_size + 1
             # Extract windows using a sliding approach
-            X_windows = np.lib.stride_tricks.sliding_window_view(X, (n_channels, self.window_size), axis=1)[:, :, ::self.step_size]
-            return np.transpose(X_windows, (2, 0, 1))
+            X_windows = np.array([X[:,i:i + self.window_size] for i in range(0, n_samples - self.window_size + 1, self.step_size)])
+            return X_windows
 
 class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
     """Transforms a list of time series into non-overlapping windows of shape (n_channels, window_size). 
@@ -399,7 +403,7 @@ def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_rie
     # sample 10% from each cluster
     stratified_subset = (   
         df.groupby('cluster', group_keys=False)
-        .apply(lambda x: x.sample(frac=0.1, random_state=42), include_groups=False)
+        .apply(lambda x: x.sample(frac=.1, random_state=random_state), include_groups=False)
         .reset_index(drop=True)
     )
     stratified_indices = stratified_subset['index'].values  # Remove cluster column
@@ -446,11 +450,11 @@ def ch_score(pipeline):
 # ------------------------------------------------------------
 ### Load data
 # Load the dataset
-npz = np.load('./data/ts_two_blocks.npz')
+npz = np.load('./data/ts_one_brain.npz')
 X = []
 for array in list(npz.files):
     X.append(npz[array])
-doc = pd.read_csv('./data/doc_two_blocks.csv', index_col = 0)
+doc = pd.read_csv('./data/doc_one_brain.csv', index_col = 0)
 conditions = [
     (doc['2'] == 0),
     (doc['2'] == 1) | (doc['2'] == 2),
@@ -474,39 +478,47 @@ print(
 pipeline_Riemannian = Pipeline(
     [
         ("windows", ListTimeSeriesWindowTransformer(
-            window_size = upsampling_freq*15
+            window_size = upsampling_freq*15,
+            step_size = upsampling_freq*1
         )),
-        ("block_kernels", HybridBlocks(block_size=block_size,
+        ("block_kernels", HybridBlocks(block_size=4,
                                        shrinkage=0.1, 
                                        metrics="cov"
         )),
-        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
-            n_clusters=3, 
-            n_init = 10))
+#        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
+#            n_clusters=3, 
+#            n_init = 10))
     ], verbose = True
 )
 
 # ------------------------------------------------------------
 ### Fit the models
-pipeline_Riemannian.fit(X)
+pipeline_Riemannian.fit_transform(X)
 print(f"Silhouette Score: {riemannian_silhouette_score(pipeline_Riemannian)}")
 print(f"Calinski-Harabasz Score: {ch_score(pipeline_Riemannian)}")
+
+# ------------------------------------------------------------
+### Get PCA
+x_transformed = np.array(pipeline_Riemannian.named_steps["block_kernels"].matrices_)
+timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+np.save(f"results/matrices_{timestamp}.npy", x_transformed)
 
 # ------------------------------------------------------------
 ### Grid search
 
 # Define parameters
-params_window_length = [15] # virtual trial length in s
-params_shrinkage = [0.1, 0.3, 0.7]
-params_kernel = ['cov', 'rbf', 'lwf', 'tyl'] #, 'corr']
-params_n_clusters = range(3, 8)
+#params_window_length = [15] # virtual trial length in s
+#params_shrinkage = [0.1, 0.3, 0.7]
+#params_kernel = ['cov', 'rbf', 'lwf', 'tyl'] #, 'corr']
+#params_n_clusters = sys.argv[1]
 
 # Compute grid search parameters from these inputs
-params_window_size = [x * upsampling_freq for x in params_window_length]
-comb_shrinkage = product(params_shrinkage, repeat=int(n_channels / block_size))
-params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
-comb_kernel = product(params_kernel, repeat=int(n_channels / block_size))
-params_kernel_combinations = [list(x) for x in comb_kernel]
+#params_window_size = [x * upsampling_freq for x in params_window_length]
+#comb_shrinkage = product(params_shrinkage, repeat = int(n_channels / block_size))
+#params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
+#comb_kernel = product(params_kernel, repeat = int(n_channels / block_size))
+#params_kernel_combinations = [list(x) for x in comb_kernel]
+#params_n_clusters = [int(params_n_clusters)]
 
 # Define grid search for GridSearchCV
 #param_grid_hybrid_blocks = {
@@ -532,39 +544,39 @@ params_kernel_combinations = [list(x) for x in comb_kernel]
 # custom grid search
 # We could implement additional scores here, e.g. David-Bouldin index, but this one is based on Euclidean distances. 
 # Another (somewhat more difficult) possibility is a comparison based on Fowlkes-Mallows indices or pair confusion matrices
-scores = []
-i = 0
-for window_size in params_window_size:
-    for shrinkage in params_shrinkage_combinations: 
-        for kernel in params_kernel_combinations: 
-            for n_clusters in params_n_clusters: 
-                i += 1
-                print(f"Iteration {i}, parameters: window length {window_size/upsampling_freq}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
-                pipeline_hybrid_blocks = Pipeline(
-                    [
-                        ("windows", ListTimeSeriesWindowTransformer(
-                                       window_size = window_size)),
-                        ("block_kernels", HybridBlocks(block_size=block_size,
-                                        shrinkage=shrinkage, 
-                                        metrics=kernel
-                                        )),
-                        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
-                                        n_clusters=n_clusters, 
-                                        max_iter=max_iter, 
-                                        n_init = 10,
-                                        ))
-                    ], verbose = True       
-                )
-                pipeline_hybrid_blocks.fit(X)
-                scores.append(
-                    [window_size, shrinkage, kernel, n_clusters, 
-                     riemannian_silhouette_score(pipeline_hybrid_blocks),
-                     ch_score(pipeline_hybrid_blocks)])
-scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'nClusters', 
-                                       'SilhouetteCoefficient', 
-                                       'CalinskiHarabaszScore'])
+#scores = []
+#i = 0
+#for window_size in params_window_size:
+#    for shrinkage in params_shrinkage_combinations: 
+#        for kernel in params_kernel_combinations: 
+#            for n_clusters in params_n_clusters: 
+#                i += 1
+#                print(f"Iteration {i}, parameters: window length {window_size/upsampling_freq}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
+#                pipeline_hybrid_blocks = Pipeline(
+#                    [
+#                        ("windows", ListTimeSeriesWindowTransformer(
+#                                       window_size = window_size)),
+#                        ("block_kernels", HybridBlocks(block_size=block_size,
+#                                        shrinkage=shrinkage, 
+#                                        metrics=kernel
+#                                        )),
+#                        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
+#                                        n_clusters=n_clusters, 
+#                                        max_iter=max_iter, 
+#                                        n_init = 10,
+#                                        ))
+#                    ], verbose = True       
+#                )
+#                pipeline_hybrid_blocks.fit(X)
+#                scores.append(
+#                   [window_size, shrinkage, kernel, n_clusters, 
+#                     riemannian_silhouette_score(pipeline_hybrid_blocks),
+#                     ch_score(pipeline_hybrid_blocks)])
+#scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'nClusters', 
+#                                       'SilhouetteCoefficient', 
+#                                       'CalinskiHarabaszScore'])
 
 # save results
-print("saving results")
-timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-scores.to_csv(f"results/grid_search_results_{timestamp}.csv", index=False)
+#print("saving results")
+#timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+#scores.to_csv(f"results/grid_search_results_{timestamp}.csv", index=False)

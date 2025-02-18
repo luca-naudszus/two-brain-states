@@ -5,13 +5,14 @@ from pyriemann.utils.tangentspace import tangent_space
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
-X = np.array(x_transformed)
+x_transformed = pipeline_Riemannian.named_steps["block_kernels"].matrices_
+matrices = np.array(x_transformed)
 
-mean_matrix = mean_riemann(X)
+mean_matrix = mean_riemann(matrices)
 # Project matrices into tangent space
-X_tangent = tangent_space(X, mean_matrix)
+X_tangent = tangent_space(matrices, mean_matrix)
 
-pca = PCA(n_components=2)
+pca = PCA(n_components=3)
 X_pca = pca.fit_transform(X_tangent)
 
 # Plot
