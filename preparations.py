@@ -256,6 +256,8 @@ for i, row in dyads.iterrows():
             target_list = data_dict[target_key]['interpolation']
             for activity in range(4):
                 target_ts = target_list[activity]
+                # channel-wise z-scoring
+                target_ts = sp.stats.zscore(target_ts, axis=1, ddof=1)
                 # first, one brain data (two blocks: HbO + HbR)
                 ts_one_brain.append(target_ts)
                 doc_one_brain.extend([[row['pID1'], session, activity]])
@@ -268,6 +270,9 @@ for i, row in dyads.iterrows():
                 for activity in range(4):
                     target_ts = target_list[activity]
                     partner_ts = partner_list[activity]
+                    # channel-wise z-scoring
+                    target_ts = sp.stats.zscore(target_ts, axis=1, ddof=1)
+                    partner_ts = sp.stats.zscore(partner_ts, axis=1, ddof=1)
                     
                     # second, two blocks: target + partner
                     ts_two = np.concatenate((target_ts, partner_ts), axis = 0)         
@@ -279,16 +284,6 @@ for i, row in dyads.iterrows():
                     ts_four_blocks.append(ts_four)
                     doc_four_blocks.extend([[row['dyadID'], session, activity]])
 
-#z-score data
-def z_score(list):
-    all_values = np.concatenate([arr.flatten() for arr in list])
-    mean = np.mean(all_values)
-    std = np.std(all_values)
-    list = [(arr - mean) / std for arr in list]
-    return list
-ts_one_brain = z_score(ts_one_brain)
-ts_two_blocks = z_score(ts_two_blocks)
-ts_four_blocks = z_score(ts_four_blocks)
 
 doc_one_brain = pd.DataFrame(doc_one_brain)
 doc_two_blocks = pd.DataFrame(doc_two_blocks)

@@ -1,30 +1,15 @@
-# Author: Luca A. Naudszus, Social Brain Sciences, ETH Zurich
-# Date: 27 January 2025
-
-
-# ------------------------------------------------------------
-# import packages
-
-from datetime import datetime
-from itertools import product
-from joblib import Parallel, delayed
-import matplotlib.pyplot as plt
 import numpy as np
-from scipy.linalg import block_diag
-import sys
 import pandas as pd
-import sklearn
+from joblib import Parallel, delayed
+
 from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
-from sklearn.model_selection import StratifiedKFold
+
 from sklearn.compose import ColumnTransformer
 from sklearn.utils.validation import check_is_fitted
 from sklearn.pipeline import Pipeline, make_pipeline
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import GridSearchCV
+
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
-from pyriemann.utils.mean import mean_riemann
-from pyriemann.utils.tangentspace import tangent_space
-from sklearn.decomposition import PCA
+
 import pyriemann
 from pyriemann.classification import SVC
 from pyriemann.estimation import (
@@ -39,23 +24,20 @@ ker_est_functions = [
 ]
 from pyriemann.utils.covariance import cov_est_functions
 
+from scipy.linalg import block_diag
+
 # ------------------------------------------------------------
 # define constant values
-block_size = 8 # number of channels for HbO and HbR
 n_jobs = -1 # use all available cores
-cv_splits = 5 # number of cross-validation folds
-random_state = 42 # random state for reproducibility
-n_clusters = 5 # number of clusters for k-means
-n_init = 100 # number of initializations
 max_iter = 5 # maximum number of iterations
-upsampling_freq = 5 # frequency to which the data have been upsampled
+random_state = 42
 
 # ------------------------------------------------------------
 # define custom classes and functions
 class WindowTransformer(BaseEstimator, TransformerMixin):
     """Splits the time series into non-overlapping windows of shape (n_channels, window_size). 
         Author: Luca Naudszus."""
-    def __init__(self, window_size=upsampling_freq*10, step_size=None):
+    def __init__(self, window_size=75, step_size=None):
         self.window_size = window_size
         self.step_size = step_size
 
@@ -65,7 +47,7 @@ class WindowTransformer(BaseEstimator, TransformerMixin):
     def transform(self, X):
         assert isinstance(X, np.ndarray), "Input must be a NumPy array"
         n_channels = X.shape[0]
-        assert X.ndim == 2 and (n_channels in {8, 16}), "Unexpected input shape"
+        assert X.ndim == 2 and (n_channels in {8, 16}), "Unexpected input shape" #TODO: accept different n_channels
         n_samples = X.shape[1]
         if self.step_size == None: 
             n_windows = n_samples // self.window_size
@@ -77,11 +59,23 @@ class WindowTransformer(BaseEstimator, TransformerMixin):
             # Extract windows using a sliding approach
             X_windows = np.array([X[:,i:i + self.window_size] for i in range(0, n_samples - self.window_size + 1, self.step_size)])
             return X_windows
+        
+    def transform_labels(self, X, y): 
+        assert isinstance(X, np.ndarray), "Input must be a NumPy array"
+        n_channels = X.shape[0]
+        assert X.ndim == 2 and (n_channels in {8, 16}), "Unexpected input shape" #TODO: accept different n_channels
+        n_samples = X.shape[1]
+        if self.step_size == None: 
+            n_windows = n_samples // self.window_size
+        else: 
+            n_windows = (n_samples - self.window_size) // self.step_size + 1
+        y = n_windows * [y]
+        return y
 
 class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
     """Transforms a list of time series into non-overlapping windows of shape (n_channels, window_size). 
         Author: Luca Naudszus."""
-    def __init__(self, window_size = upsampling_freq*10, step_size=None):
+    def __init__(self, window_size = 75, step_size=None):
         self.window_size = window_size
         self.step_size = step_size
         self.base_transformer = WindowTransformer(window_size, step_size)
@@ -93,6 +87,11 @@ class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
         assert isinstance(X, list), "Input must be a list of NumPy arrays"
         transformed = [self.base_transformer.transform(x) for x in X]
         return np.concatenate(transformed, axis = 0)
+    
+    def transform_labels(self, X, y):
+        """Adjust labels to match the windowed data."""
+        transformed_y = [self.base_transformer.transform_labels(x, y_i) for x, y_i in zip(X, y)]
+        return np.concatenate(transformed_y, axis = 0)
 
 class Stacker(TransformerMixin):
     """Stacks values of a DataFrame column into a 3D array. Author: Tim Näher."""
@@ -445,156 +444,3 @@ def ch_score(pipeline):
     # (2) Calculate Calinski-Harabasz score
     score = calinski_harabasz_score(block_matrices, preds)
     return score
-
-            
-# ------------------------------------------------------------
-### Load data
-# Load the dataset
-npz = np.load('./data/ts_four_blocks.npz')
-X = []
-for array in list(npz.files):
-    X.append(npz[array])
-doc = pd.read_csv('./data/doc_four_blocks.csv', index_col = 0)
-conditions = [
-    (doc['2'] == 0),
-    (doc['2'] == 1) | (doc['2'] == 2),
-    (doc['2'] == 3)]
-choices = ['alone', 'collab', 'diverse']
-dyads = np.array(doc['0'])
-y = np.select(conditions, choices, default='unknown')
-n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeseries
-
-# choose only drawing alone and collaborative drawing
-X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
-dyads = dyads[y != 'diverse']
-y = y[y != 'diverse']
-
-# ------------------------------------------------------------
-### Set up the pipeline
-
-# Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
-pipeline_Riemannian = Pipeline(
-    [
-        ("windows", ListTimeSeriesWindowTransformer(
-            window_size = upsampling_freq*15,
-            step_size = upsampling_freq*1
-        )),
-        ("block_kernels", HybridBlocks(block_size=block_size,
-                                       shrinkage=0.01, 
-                                       metrics='cov'
-        )),
-        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
-            n_clusters=4, 
-            n_init = 10))
-    ], verbose = True
-)
-
-# ------------------------------------------------------------
-### Fit the models
-pipeline_Riemannian.fit(X)
-print(f"Silhouette Score: {riemannian_silhouette_score(pipeline_Riemannian)}")
-print(f"Calinski-Harabasz Score: {ch_score(pipeline_Riemannian)}")
-
-# # ------------------------------------------------------------
-### Predict labels
-matrices = np.array(pipeline_Riemannian.named_steps["block_kernels"].matrices_)
-classes = pipeline_Riemannian.named_steps["kmeans"].predict(matrices)
-
-# ------------------------------------------------------------
-### PCA and plot
-mean_matrix = mean_riemann(matrices)
-X_tangent = tangent_space(matrices, mean_matrix)
-pca = PCA(n_components=2)
-X_pca = pca.fit_transform(X_tangent)
-
-# Plot
-plt.figure(figsize=(6, 5))
-for label in np.unique(classes): 
-    plt.scatter(X_pca[classes == label, 0], X_pca[classes == label, 1], label=f"Class {label}", alpha=0.8)
-plt.xlabel("PC1")
-plt.xlabel("PC2")
-plt.title("Tangent Space PCA projection")
-plt.legend()
-plt.show()
-
-# ------------------------------------------------------------
-### Grid search
-
-# Define parameters
-params_window_length = [15] # virtual trial length in s
-params_shrinkage = [0, 0.01, 0.1]
-params_kernel = ['cov', 'rbf', 'lwf', 'tyl'] #, 'corr']
-params_n_clusters = sys.argv[1]
-
-# Compute grid search parameters from these inputs
-params_window_size = [x * upsampling_freq for x in params_window_length]
-comb_shrinkage = product(params_shrinkage, repeat = int(n_channels / block_size))
-params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
-comb_kernel = product(params_kernel, repeat = int(n_channels / block_size))
-params_kernel_combinations = [list(x) for x in comb_kernel]
-params_n_clusters = range(3,10)
-
-# Define grid search for GridSearchCV
-#param_grid_hybrid_blocks = {
-#    'windows__window_size': params_window_size,
-#    'block_kernels__shrinkage': params_shrinkage,
-#    'block_kernels__metrics': params_kernel_combinations,
-#    'kmeans__n_clusters': params_n_clusters
-#}
-
-#grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
-#                           param_grid_hybrid_blocks, 
-#                           scoring=riemannian_silhouette_score, 
-#                           n_jobs=n_jobs,
-#                           verbose=10,
-#                           error_score="raise")
-
-# execute grid search 
-#TODO: Currently, this does not work because labels and data are not taken 
-# from the same fold. 
-#print("executing grid search")
-#grid_search_hybrid_blocks.fit(X)
-
-# custom grid search
-# We could implement additional scores here, e.g. David-Bouldin index, but this one is based on Euclidean distances. 
-# Another (somewhat more difficult) possibility is a comparison based on Fowlkes-Mallows indices or pair confusion matrices
-scores = []
-i = 0
-for window_size in params_window_size:
-    for shrinkage in params_shrinkage_combinations: 
-        for kernel in params_kernel_combinations: 
-            for n_clusters in params_n_clusters: 
-                i += 1
-                print(f"Iteration {i}, parameters: window length {window_size/upsampling_freq}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
-                pipeline_hybrid_blocks = Pipeline(
-                    [
- #                       ("windows", ListTimeSeriesWindowTransformer(
-#                                       window_size = window_size)),
-                        ("block_kernels", HybridBlocks(block_size=block_size,
-                                        shrinkage=shrinkage, 
-                                        metrics=kernel
-                                        )),
-                        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
-                                        n_clusters=n_clusters, 
-                                        max_iter=max_iter, 
-                                        n_init = 10,
-                                        ))
-                    ], verbose = True       
-                )
-                try:
-                    pipeline_hybrid_blocks.fit(X)
-                except ValueError as e:
-                    print(f"Skipping due to error: {e}")  # Optional: print the error message
-                    continue
-                scores.append(
-                   [window_size, shrinkage, kernel, n_clusters, 
-                     riemannian_silhouette_score(pipeline_hybrid_blocks),
-                     ch_score(pipeline_hybrid_blocks)])
-scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'nClusters', 
-                                       'SilhouetteCoefficient', 
-                                       'CalinskiHarabaszScore'])
-
-# save results
-#print("saving results")
-#timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-#scores.to_csv(f"results/grid_search_results_{timestamp}.csv", index=False)
