@@ -246,48 +246,73 @@ df_durations.ratio = np.where(df_durations.ratio < 1, 1 / df_durations.ratio,
                             df_durations.ratio)
 
 ts_one_brain, ts_two_blocks, ts_four_blocks = [], [], []
+ts_one_brain_session, ts_two_blocks_session, ts_four_blocks_session = [], [], []
 doc_one_brain, doc_two_blocks, doc_four_blocks = [], [], []
+doc_one_brain_session, doc_two_blocks_session, doc_four_blocks_session = [], [], []
 key_list = set(data_dict.keys())
-
+#TODO: we need to differentiate between activities for different sessions nevertheless
 for i, row in dyads.iterrows():
     for session in range(6):
         target_key = f"sub-{row['pID1']}_session-{session + 1}"
+        
         if target_key in key_list: 
             target_list = data_dict[target_key]['interpolation']
+            partner_key = f"sub-{row['pID2']}_session-{session + 1}"
+            ts_target_temp, ts_partner_temp, ts_two_temp, ts_four_temp = [], [], [], []
             for activity in range(4):
                 target_ts = target_list[activity]
                 # channel-wise z-scoring
                 target_ts = sp.stats.zscore(target_ts, axis=1, ddof=1)
-                # first, one brain data (two blocks: HbO + HbR)
+                # 1a, one brain data (two blocks: HbO + HbR), channel-wise z-scored
                 ts_one_brain.append(target_ts)
                 doc_one_brain.extend([[row['pID1'], session, activity]])
-
-            partner_key = f"sub-{row['pID2']}_session-{session + 1}"
-            if partner_key in key_list: 
-                
-                partner_list = data_dict[partner_key]['interpolation']
-
-                for activity in range(4):
-                    target_ts = target_list[activity]
+                ts_target_temp.append(target_ts)
+            
+                if partner_key in key_list: 
+                    
+                    partner_list = data_dict[partner_key]['interpolation']
                     partner_ts = partner_list[activity]
                     # channel-wise z-scoring
-                    target_ts = sp.stats.zscore(target_ts, axis=1, ddof=1)
                     partner_ts = sp.stats.zscore(partner_ts, axis=1, ddof=1)
+                    # 1a, one brain data (two blocks: HbO + HbR), channel-wise z-scored
+                    ts_one_brain.append(partner_ts)
+                    doc_one_brain.extend([[row['pID2'], session, activity]])
+                    ts_partner_temp.append(partner_ts)
                     
-                    # second, two blocks: target + partner
+                    # 2a, two blocks: target + partner, channel-wise z-scored
                     ts_two = np.concatenate((target_ts, partner_ts), axis = 0)         
                     ts_two_blocks.append(ts_two)
                     doc_two_blocks.extend([[row['dyadID'], session, activity]])
-
+                    ts_two_temp.append(ts_two)
+                    
                     # third, four blocks: target HbO, partner HbO, target HbR, partner HbR
                     ts_four = np.concatenate((target_ts[:4], partner_ts[:4], target_ts[4:8], partner_ts[4:8]), axis=0)
                     ts_four_blocks.append(ts_four)
                     doc_four_blocks.extend([[row['dyadID'], session, activity]])
-
+                    ts_four_temp.append(ts_four)
+            # 1b, one brain data as above, channel- and session-wise z-scored
+            ts_target_temp = sp.stats.zscore(np.concatenate(ts_target_temp, axis = 1), ddof=1)
+            ts_one_brain_session.append(ts_target_temp)
+            doc_one_brain_session.extend([[row['pID1'], session]])
+            if partner_key in key_list: 
+                ts_partner_temp = sp.stats.zscore(np.concatenate(ts_partner_temp, axis=1), ddof=1)
+                ts_one_brain_session.append(ts_partner_temp)
+                doc_one_brain_session.extend([[row['pID2'], session]])
+                # 2b, two blocks as above, channel- and session-wise z-scored
+                ts_two_temp = sp.stats.zscore(np.concatenate(ts_two_temp, axis=1), ddof=1)
+                ts_two_blocks_session.append(ts_two_temp)
+                doc_two_blocks_session.extend([[row['dyadID'], session]])
+                # 3b, four blocks as above, channel- and session-wise z-scored
+                ts_four_temp = sp.stats.zscore(np.concatenate(ts_four_temp, axis=1), ddof=1)
+                ts_four_blocks_session.append(ts_four_temp)
+                doc_four_blocks_session.extend([[row['dyadID'], session]])
 
 doc_one_brain = pd.DataFrame(doc_one_brain)
 doc_two_blocks = pd.DataFrame(doc_two_blocks)
 doc_four_blocks = pd.DataFrame(doc_four_blocks)
+doc_one_brain_session = pd.DataFrame(doc_one_brain_session)
+doc_two_blocks_session = pd.DataFrame(doc_two_blocks_session)
+doc_four_blocks_session = pd.DataFrame(doc_four_blocks_session)
 
 # save
 doc_one_brain.to_csv(str(path + 'doc_one_brain.csv'))
@@ -296,3 +321,9 @@ doc_two_blocks.to_csv(str(path + 'doc_two_blocks.csv'))
 np.savez(str(path + 'ts_two_blocks'), *ts_two_blocks)
 doc_four_blocks.to_csv(str(path + 'doc_four_blocks.csv'))
 np.savez(str(path + 'ts_four_blocks'), *ts_four_blocks)
+doc_one_brain_session.to_csv(str(path + 'doc_one_brain_session.csv'))
+np.savez(str(path + 'ts_one_brain_session'), *ts_one_brain_session)
+doc_two_blocks_session.to_csv(str(path + 'doc_two_blocks_session.csv'))
+np.savez(str(path + 'ts_two_blocks_session'), *ts_two_blocks_session)
+doc_four_blocks_session.to_csv(str(path + 'doc_four_blocks_session.csv'))
+np.savez(str(path + 'ts_four_blocks_session'), *ts_four_blocks_session)

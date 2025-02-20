@@ -108,8 +108,13 @@ def pipeline(X, y, sessions, dyad, plot, window_length, step_length, shrinkage, 
 # ------------------------------------------------------------
 ### set arguments
 
+# which type of data are 3e interested in?
+type_of_data = "four_blocks_session"
+# one_brain, two_blocks, four_blocks: channel-wise z-scoring
+# one_brain_session etc.: channel- and session-wise z-scoring
+
 # which dyad do we want to look at? (set dyad = 0 for all dyads)
-dyad = 2014
+dyad = 0
 
 # do we want to do a single run or a grid search? (0 = single run, 1 = grid search)
 grid_search = 0
@@ -117,7 +122,8 @@ grid_search = 0
 ## in case of 1, define parameter space below
 
 # are we interested in the plot? (0/1, overridden in case of grid search)
-plot = 1
+plot = 0
+#TODO: make plot work with session-wise z-scoring
 
 # define global settings
 n_jobs = -1 # use all available cores
@@ -146,26 +152,27 @@ step_length = 1 # steps
 ### Load data
 
 # Load the dataset
-npz = np.load('./data/ts_four_blocks.npz')
+npz = np.load(f"./data/ts_{type_of_data}.npz")
 X = []
 for array in list(npz.files):
     X.append(npz[array])
-doc = pd.read_csv('./data/doc_four_blocks.csv', index_col = 0)
-conditions = [
-    (doc['2'] == 0),
-    (doc['2'] == 1) | (doc['2'] == 2),
-    (doc['2'] == 3)]
-choices = ['alone', 'collab', 'diverse']
+doc = pd.read_csv(f"./data/doc_{type_of_data}.csv", index_col = 0)
 dyads = np.array(doc['0'])
 sessions = np.array(doc['1'])
-y = np.select(conditions, choices, default='unknown')
-n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeseries
+if (type_of_data[-7:] != 'session'):
+    conditions = [
+        (doc['2'] == 0),
+        (doc['2'] == 1) | (doc['2'] == 2),
+        (doc['2'] == 3)]
+    choices = ['alone', 'collab', 'diverse']
+    y = np.select(conditions, choices, default='unknown')
 
-# choose only drawing alone and collaborative drawing
-X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
-dyads = dyads[y != 'diverse']
-sessions = sessions[y != 'diverse']
-y = y[y != 'diverse']
+    # choose only drawing alone and collaborative drawing
+    X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
+    dyads = dyads[y != 'diverse']
+    sessions = sessions[y != 'diverse']
+    y = y[y != 'diverse']
+n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeseries
 
 # make variable for chosen dyads
 chosen_dyads = np.unique(dyads) if dyad == 0 else [dyad]

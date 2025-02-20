@@ -384,7 +384,8 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
         return self.fit(X).labels_
 
 def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_riemann): 
-    """Calculates Silhouette Coefficient based on pairwise Affine-Invariant Riemannian Metric on randomly chosen matrices.""" 
+    """Calculates Silhouette Coefficient based on pairwise Affine-Invariant Riemannian Metric 
+    on 10% random matrices (stratified sampling).""" 
     # We could also use Bures-Wasserstein distance (distance_wasserstein), which is a lot faster, 
     # but not what is used in the actual Lloyd's algorithm as implemented above. 
 
@@ -402,7 +403,7 @@ def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_rie
     # sample 10% from each cluster
     stratified_subset = (   
         df.groupby('cluster', group_keys=False)
-        .apply(lambda x: x.sample(frac=1, random_state=random_state), include_groups=False)
+        .apply(lambda x: x.sample(frac=.1, random_state=random_state), include_groups=False)
         .reset_index(drop=True)
     )
     stratified_indices = stratified_subset['index'].values  # Remove cluster column
