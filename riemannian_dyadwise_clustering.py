@@ -61,8 +61,8 @@ def pipeline(X, y, sessions, dyad, plot, window_length, step_length, shrinkage, 
     ### Predict labels and calculate Rand score
     matrices = np.array(pipeline_Riemannian.named_steps["block_kernels"].matrices_)
     classes = pipeline_Riemannian.named_steps["kmeans"].predict(matrices)
-    activities = pipeline_Riemannian.named_steps["windows"].transform_labels(X_dyad, y_dyad)
-    sessions = pipeline_Riemannian.named_steps["windows"].transform_labels(X_dyad, sessions_dyad)
+    trans_activities = pipeline_Riemannian.named_steps["windows"].transform_labels(X_dyad, y_dyad)
+    trans_sessions = pipeline_Riemannian.named_steps["windows"].transform_labels(X_dyad, sessions_dyad)
     rand_score_act = rand_score(classes, activities)
     rand_score_ses = rand_score(classes, sessions)
 
@@ -86,8 +86,8 @@ def pipeline(X, y, sessions, dyad, plot, window_length, step_length, shrinkage, 
         plt.show()
         # With activity as labels
         plt.figure(figsize=(6, 5))
-        for label in np.unique(activities): 
-            plt.scatter(X_pca[activities == label, 0], X_pca[activities == label, 1], label=f"Class {label}", alpha=0.8)
+        for label in np.unique(trans_activities): 
+            plt.scatter(X_pca[trans_activities == label, 0], X_pca[trans_activities == label, 1], label=f"Class {label}", alpha=0.8)
         plt.xlabel("PC1")
         plt.xlabel("PC2")
         plt.title(f"Tangent Space PCA projection for dyad {dyad}")
@@ -95,8 +95,8 @@ def pipeline(X, y, sessions, dyad, plot, window_length, step_length, shrinkage, 
         plt.show()
         # With session as labels
         plt.figure(figsize=(6, 5))
-        for label in np.unique(sessions): 
-            plt.scatter(X_pca[sessions == label, 0], X_pca[sessions == label, 1], label=f"Class {label}", alpha=0.8)
+        for label in np.unique(trans_sessions): 
+            plt.scatter(X_pca[trans_sessions == label, 0], X_pca[trans_sessions == label, 1], label=f"Class {label}", alpha=0.8)
         plt.xlabel("PC1")
         plt.xlabel("PC2")
         plt.title(f"Tangent Space PCA projection for dyad {dyad}")
