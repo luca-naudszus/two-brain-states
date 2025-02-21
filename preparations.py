@@ -64,6 +64,7 @@ for file in os.listdir(inpath):
             continue
 
         # define durations of epochs
+        #TODO: find out why one epoch is too short, idea: 71.5 s gets rounded up to 71.6 s, making it one timepoint too long?
         for in_activity in range(0, 3):
             data.annotations.duration[
                 in_activity] = round(data.annotations.onset[
@@ -73,21 +74,24 @@ for file in os.listdir(inpath):
 
         # epoch data
         epoch_list = []
+        i = 0
+        events = mne.events_from_annotations(data, verbose=verbosity)
         for annot in data.annotations:
             epoch = mne.Epochs(data,
-                           mne.events_from_annotations(data, verbose=verbosity)[0][[0]],
+                           mne.events_from_annotations(data, verbose=verbosity)[0][[i]],
                            tmin = 0,
                            tmax = annot['duration'],
                            baseline = None,
                            verbose=verbosity
                            )
+            assert len(epoch.drop_log[0]) == 0, 'Dropped all epochs here'
             epoch_list.append(epoch)
+            i += 1
 
         # write into dictionary
         keyname = file[:-8]
         all_dict[keyname] = epoch_list
 
-#TODO: z-score data?
 
 # align onsets
 # To this end, we move outside the snirf structure and work only on the timeseries.
@@ -263,7 +267,7 @@ for i, row in dyads.iterrows():
                 target_ts = target_list[activity]
                 # channel-wise z-scoring
                 target_ts = sp.stats.zscore(target_ts, axis=1, ddof=1)
-                # 1a, one brain data (two blocks: HbO + HbR), channel-wise z-scored
+                # 1a target, one brain data (two blocks: HbO + HbR), channel-wise z-scored
                 ts_one_brain.append(target_ts)
                 doc_one_brain.extend([[row['pID1'], session, activity]])
                 ts_target_temp.append(target_ts)
@@ -274,7 +278,7 @@ for i, row in dyads.iterrows():
                     partner_ts = partner_list[activity]
                     # channel-wise z-scoring
                     partner_ts = sp.stats.zscore(partner_ts, axis=1, ddof=1)
-                    # 1a, one brain data (two blocks: HbO + HbR), channel-wise z-scored
+                    # 1a partner, one brain data (two blocks: HbO + HbR), channel-wise z-scored
                     ts_one_brain.append(partner_ts)
                     doc_one_brain.extend([[row['pID2'], session, activity]])
                     ts_partner_temp.append(partner_ts)
@@ -285,27 +289,45 @@ for i, row in dyads.iterrows():
                     doc_two_blocks.extend([[row['dyadID'], session, activity]])
                     ts_two_temp.append(ts_two)
                     
-                    # third, four blocks: target HbO, partner HbO, target HbR, partner HbR
+                    # 3a, four blocks: target HbO, partner HbO, target HbR, partner HbR
                     ts_four = np.concatenate((target_ts[:4], partner_ts[:4], target_ts[4:8], partner_ts[4:8]), axis=0)
                     ts_four_blocks.append(ts_four)
                     doc_four_blocks.extend([[row['dyadID'], session, activity]])
                     ts_four_temp.append(ts_four)
-            # 1b, one brain data as above, channel- and session-wise z-scored
+            # 1b target, one brain data as above, channel- and session-wise z-scored
+            ## session-wise z-scoring
+            n_samples = [ts.shape[1] for ts in ts_target_temp]
             ts_target_temp = sp.stats.zscore(np.concatenate(ts_target_temp, axis = 1), ddof=1)
-            ts_one_brain_session.append(ts_target_temp)
-            doc_one_brain_session.extend([[row['pID1'], session]])
+            ts_target_split = np.split(ts_target_temp, np.cumsum(n_samples)[:-1], axis=1)
+
+            ## append to list
+            for activity in range(4):
+                ts_one_brain_session.append(ts_target_split[activity])
+                doc_one_brain_session.extend([[row['pID1'], session, activity]])
             if partner_key in key_list: 
+                ## session-wise z-scoring
+                n_samples = [ts.shape[1] for ts in ts_partner_temp]
                 ts_partner_temp = sp.stats.zscore(np.concatenate(ts_partner_temp, axis=1), ddof=1)
-                ts_one_brain_session.append(ts_partner_temp)
-                doc_one_brain_session.extend([[row['pID2'], session]])
-                # 2b, two blocks as above, channel- and session-wise z-scored
+                ts_partner_split = np.split(ts_partner_temp, np.cumsum(n_samples)[:-1], axis=1)
+
+                n_samples = [ts.shape[1] for ts in ts_two_temp]
                 ts_two_temp = sp.stats.zscore(np.concatenate(ts_two_temp, axis=1), ddof=1)
-                ts_two_blocks_session.append(ts_two_temp)
-                doc_two_blocks_session.extend([[row['dyadID'], session]])
-                # 3b, four blocks as above, channel- and session-wise z-scored
+                ts_two_split = np.split(ts_two_temp, np.cumsum(n_samples)[:-1], axis=1)
+
+                n_samples = [ts.shape[1] for ts in ts_four_temp]
                 ts_four_temp = sp.stats.zscore(np.concatenate(ts_four_temp, axis=1), ddof=1)
-                ts_four_blocks_session.append(ts_four_temp)
-                doc_four_blocks_session.extend([[row['dyadID'], session]])
+                ts_four_split = np.split(ts_four_temp, np.cumsum(n_samples)[:-1], axis=1)
+                ## append to list
+                for activity in range(4):
+                    # 1b partner, one brain data as above, channel- and session-wise z-scored
+                    ts_one_brain_session.append(ts_partner_split[activity])
+                    doc_one_brain_session.extend([[row['pID2'], session, activity]])
+                    # 2b, two blocks as above, channel- and session-wise z-scored
+                    ts_two_blocks_session.append(ts_two_split[activity])
+                    doc_two_blocks_session.extend([[row['dyadID'], session, activity]])
+                    # 3b, four blocks as above, channel- and session-wise z-scored
+                    ts_four_blocks_session.append(ts_four_split[activity])
+                    doc_four_blocks_session.extend([[row['dyadID'], session, activity]])
 
 doc_one_brain = pd.DataFrame(doc_one_brain)
 doc_two_blocks = pd.DataFrame(doc_two_blocks)
