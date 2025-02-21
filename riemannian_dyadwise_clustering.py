@@ -257,8 +257,8 @@ if grid_search == 1:
                         scores.append(
                             [dyad, 'all', window_length, shrinkage, kernel, n_clusters, 
                             sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_sessions])
-                    elif clustering == 'session-wise':
+#                    elif clustering == 'session-wise':
 
-    scores = pd.DataFrame(scores, columns=['Dyad', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
-                                       'SilhouetteCoefficient', 'CalinskiHarabaszScore',
-                                       'RandScoreActivities', 'RandScoreSessions', 'nSessions'])
+#    scores = pd.DataFrame(scores, columns=['Dyad', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
+#                                       'SilhouetteCoefficient', 'CalinskiHarabaszScore',
+#                                       'RandScoreActivities', 'RandScoreSessions', 'nSessions'])
