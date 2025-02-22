@@ -125,11 +125,12 @@ type_of_data = "four_blocks_session"
 # one_brain_session etc.: channel- and session-wise z-scoring
 
 # how do we want to cluster?
-clustering = 'session-wise' # all (does not work yet), dyad-wise, session-wise
+clustering = 'dyad-wise' # all (does not work yet), dyad-wise, session-wise
+#TODO: implement clustering of all dyads
 # which dyad do we want to look at? (only for dyad-wise and session-wise clustering)
-which_dyad = 1012 # set dyad = 'all' for all dyads
+which_dyad = 2014 # set dyad = 'all' for all dyads
 # which session do we want to look at? (only for session-wise clustering)
-which_session = 2 # set session = 'all' for all dyads
+which_session = 'all' # set session = 'all' for all dyads
 
 # do we want to do a single run or a grid search? (0 = single run, 1 = grid search)
 grid_search = 0
@@ -148,8 +149,8 @@ max_iter = 5 # maximum number of iterations for kMeans
 # hyperparameters (overridden in case of grid search)
 cv_splits = 5 # number of cross-validation folds
 shrinkage = 0.01 # shrinkage value
-metrics = 'cov' # kernel function
-n_clusters = 4 # number of clusters for k-means
+metrics = 'rbf' # kernel function
+n_clusters = 3 # number of clusters for k-means
 
 # parameter space for grid search
 params_shrinkage = [0, 0.01, 0.1]
@@ -157,7 +158,7 @@ params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
 params_n_clusters = range(3, 8)
 
 # information on data
-block_size = 8 # number of channels for HbO and HbR
+block_size = 4 # number of channels for HbO and HbR
 upsampling_freq = 5 # frequency to which the data have been upsampled
 window_length = 15 # length of windows in s
 step_length = 1 # steps 
@@ -194,7 +195,6 @@ n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeserie
 
 # ------------------------------------------------------------
 ### Run pipeline 
-
 
 if grid_search == 0:
     scores = []
@@ -258,7 +258,13 @@ if grid_search == 1:
                             [dyad, 'all', window_length, shrinkage, kernel, n_clusters, 
                             sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_sessions])
 #                    elif clustering == 'session-wise':
+#TODO: write this section for session-wise clustering
+    scores = pd.DataFrame(scores, columns=['Dyad', 'Session', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
+                                       'SilhouetteCoefficient', 'CalinskiHarabaszScore',
+                                       'RandScoreActivities', 'RandScoreSessions', 'nSessions'])
 
-#    scores = pd.DataFrame(scores, columns=['Dyad', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
-#                                       'SilhouetteCoefficient', 'CalinskiHarabaszScore',
-#                                       'RandScoreActivities', 'RandScoreSessions', 'nSessions'])
+# ------------------------------------------------------------
+### save results
+print("saving results")
+timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+scores.to_csv(f"results/results_{timestamp}.csv", index=False)

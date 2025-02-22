@@ -64,21 +64,20 @@ for file in os.listdir(inpath):
             continue
 
         # define durations of epochs
-        #TODO: find out why one epoch is too short, idea: 71.5 s gets rounded up to 71.6 s, making it one timepoint too long?
-        for in_activity in range(0, 3):
+        #TODO: base calculations on events rather than on annotations
+        events, event_dict = mne.events_from_annotations(data, verbose=verbosity)
+        for in_activity in range(3):
             data.annotations.duration[
-                in_activity] = round(data.annotations.onset[
-                in_activity + 1] - data.annotations.onset[in_activity], 3)
-            data.annotations.duration[3] = round(data[
-            data.ch_names[0]][1].max() - data.annotations.onset[3], 3)
+                in_activity] = (events[in_activity + 1][0] - events[in_activity][0] - 1)/5
+        data.annotations.duration[3] = (data[data.ch_names[0]][0].shape[1] - events[3][0] - 1)/5
 
         # epoch data
         epoch_list = []
         i = 0
-        events = mne.events_from_annotations(data, verbose=verbosity)
+        
         for annot in data.annotations:
             epoch = mne.Epochs(data,
-                           mne.events_from_annotations(data, verbose=verbosity)[0][[i]],
+                           events[[i]],
                            tmin = 0,
                            tmax = annot['duration'],
                            baseline = None,
