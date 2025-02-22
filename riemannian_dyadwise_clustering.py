@@ -121,6 +121,7 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
 
 # which type of data are we interested in?
 type_of_data = "four_blocks_session"
+#TODO: implement one brain clustering
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 

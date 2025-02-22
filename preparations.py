@@ -5,6 +5,7 @@
 #**Affiliation:** Social Brain Sciences, ETH Zürich
 #**Email:** luca.naudszus@gess.ethz.ch
 
+#TODO: structure this script and simplify it
 from datetime import datetime
 import mne
 import numpy as np
@@ -64,7 +65,6 @@ for file in os.listdir(inpath):
             continue
 
         # define durations of epochs
-        #TODO: base calculations on events rather than on annotations
         events, event_dict = mne.events_from_annotations(data, verbose=verbosity)
         for in_activity in range(3):
             data.annotations.duration[
@@ -253,7 +253,6 @@ ts_one_brain_session, ts_two_blocks_session, ts_four_blocks_session = [], [], []
 doc_one_brain, doc_two_blocks, doc_four_blocks = [], [], []
 doc_one_brain_session, doc_two_blocks_session, doc_four_blocks_session = [], [], []
 key_list = set(data_dict.keys())
-#TODO: we need to differentiate between activities for different sessions nevertheless
 for i, row in dyads.iterrows():
     for session in range(6):
         target_key = f"sub-{row['pID1']}_session-{session + 1}"
