@@ -121,7 +121,6 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
 
 # which type of data are we interested in?
 type_of_data = "four_blocks_session"
-#TODO: implement one brain clustering
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 
@@ -129,17 +128,17 @@ type_of_data = "four_blocks_session"
 clustering = 'dyad-wise' # all (does not work yet), dyad-wise, session-wise
 #TODO: implement clustering of all dyads
 # which dyad do we want to look at? (only for dyad-wise and session-wise clustering)
-which_dyad = 2014 # set dyad = 'all' for all dyads
+which_dyad = 'all' # set dyad = 'all' for all dyads
 # which session do we want to look at? (only for session-wise clustering)
 which_session = 'all' # set session = 'all' for all dyads
 
 # do we want to do a single run or a grid search? (0 = single run, 1 = grid search)
-grid_search = 0
+grid_search = 1
 ## in case of 0, define hyperparameters below
 ## in case of 1, define parameter space below
 
 # are we interested in the plot? (0/1, overridden in case of grid search)
-plot = 1
+plot = 0
 
 # define global settings
 n_jobs = -1 # use all available cores
@@ -240,24 +239,24 @@ if grid_search == 1:
 
     scores = []
     i = 0
-    for dyad in chosen_dyads: 
-        for shrinkage in params_shrinkage_combinations: 
-            for kernel in params_kernel_combinations: 
-                for n_clusters in params_n_clusters: 
+    for dyad in chosen_dyads:
+        for shrinkage in params_shrinkage_combinations:
+            for kernel in params_kernel_combinations:
+                for n_clusters in params_n_clusters:
                     if clustering == 'dyad-wise':
                         i += 1
                         print(f"Iteration {i}, parameters: dyad {dyad}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                         try:
-                            matrices, classes, sh_score_pipeline, ch_score_pipeline, n_sessions = pipeline(
-                                X, y, dyad=dyad, session = np.nan,
-                                plot=plot, window_length=window_length, step_length=step_length, 
+                            matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
+                                X, y, dyad=dyad, session=np.nan,
+                                plot=plot, window_length=window_length, step_length=step_length,
                                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
                         except ValueError as e:
                             print(f"Skipping due to error: {e}")  # Optional: print the error message
                             continue
                         scores.append(
                             [dyad, 'all', window_length, shrinkage, kernel, n_clusters, 
-                            sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_sessions])
+                            sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities])
 #                    elif clustering == 'session-wise':
 #TODO: write this section for session-wise clustering
     scores = pd.DataFrame(scores, columns=['Dyad', 'Session', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
