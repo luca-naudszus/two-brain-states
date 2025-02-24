@@ -125,7 +125,7 @@ type_of_data = "four_blocks_session"
 # one_brain_session etc.: channel- and session-wise z-scoring
 
 # how do we want to cluster?
-clustering = 'dyad-wise' # all (does not work yet), dyad-wise, session-wise
+clustering = 'session-wise' # all (does not work yet), dyad-wise, session-wise
 #TODO: implement clustering of all dyads
 # which dyad do we want to look at? (only for dyad-wise and session-wise clustering)
 which_dyad = 'all' # set dyad = 'all' for all dyads
@@ -257,8 +257,23 @@ if grid_search == 1:
                         scores.append(
                             [dyad, 'all', window_length, shrinkage, kernel, n_clusters, 
                             sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities])
-#                    elif clustering == 'session-wise':
-#TODO: write this section for session-wise clustering
+                    elif clustering == 'session-wise':
+                        chosen_sessions = np.unique(sessions[dyads == dyad]) if which_session == 'all' else [which_session]
+                        for session in chosen_sessions:
+                            try:
+                                matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
+                                X, y, dyad=dyad, session=np.nan,
+                                plot=plot, window_length=window_length, step_length=step_length,
+                                shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+                            except ValueError as e:
+                                print(f"Skipping due to error: {e}")  # Optional: print the error message
+                                continue
+                            except AssertionError as e:
+                                print(f"Skipping due to error: {e}")  # Optional: print the error message
+                                continue
+                            scores.append(
+                                [dyad, session, window_length, shrinkage, kernel, n_clusters, 
+                            sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities])
     scores = pd.DataFrame(scores, columns=['Dyad', 'Session', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
                                        'SilhouetteCoefficient', 'CalinskiHarabaszScore',
                                        'RandScoreActivities', 'RandScoreSessions', 'nSessions'])
