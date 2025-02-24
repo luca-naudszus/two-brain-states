@@ -26,16 +26,17 @@ from riemannianKMeans import ListTimeSeriesWindowTransformer, HybridBlocks, Riem
 def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, metrics, n_clusters): 
     # ------------------------------------------------------------
     ### Get data
-    if clustering == 'dyad-wise':
-        # choose only one dyad
+    if clustering == 'all':
+        X_tmp, y_tmp, sessions_tmp = X, y, sessions
+        print(f"Data loaded: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
+    elif clustering == 'dyad-wise':
         indices = np.where(dyads == dyad)[0]
-    elif clustering == 'session-wise':
-        indices = np.where((dyads == dyad) & (sessions == session))[0]
-        assert len(indices) != 0, 'Dyad-session combination does not exist in data set.'
-    X_tmp, y_tmp, sessions_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices]
-    if clustering == 'dyad-wise':
+        X_tmp, y_tmp, sessions_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices]
         print(f"Data loaded for dyad {dyad}: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
     elif clustering == 'session-wise':
+        indices = np.where((dyads == dyad) & (sessions == session))[0]
+        X_tmp, y_tmp, sessions_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices]
+        assert len(indices) != 0, 'Dyad-session combination does not exist in data set.'
         print(f"Data loaded for dyad {dyad} and session {session}: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
     # ------------------------------------------------------------
     ### Set up the pipeline
@@ -59,6 +60,7 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
 
     # ------------------------------------------------------------
     ### Fit the models
+    #TODO: Add Davis Bouldin index
     pipeline_Riemannian.fit(X_tmp)
     sh_score_pipeline = riemannian_silhouette_score(pipeline_Riemannian)
     ch_score_pipeline = ch_score(pipeline_Riemannian)
@@ -67,6 +69,7 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
 
     # # ------------------------------------------------------------
     ### Predict labels and calculate Rand score
+    #TODO: adapt Rand scores for different clustering options
     matrices = np.array(pipeline_Riemannian.named_steps["block_kernels"].matrices_)
     classes = pipeline_Riemannian.named_steps["kmeans"].predict(matrices)
     trans_activities = pipeline_Riemannian.named_steps["windows"].transform_labels(X_tmp, y_tmp)
@@ -125,7 +128,7 @@ type_of_data = "four_blocks_session"
 # one_brain_session etc.: channel- and session-wise z-scoring
 
 # how do we want to cluster?
-clustering = 'session-wise' # all (does not work yet), dyad-wise, session-wise
+clustering = 'all' # all (does not work yet), dyad-wise, session-wise
 #TODO: implement clustering of all dyads
 # which dyad do we want to look at? (only for dyad-wise and session-wise clustering)
 which_dyad = 'all' # set dyad = 'all' for all dyads
@@ -133,12 +136,12 @@ which_dyad = 'all' # set dyad = 'all' for all dyads
 which_session = 'all' # set session = 'all' for all dyads
 
 # do we want to do a single run or a grid search? (0 = single run, 1 = grid search)
-grid_search = 1
+grid_search = 0
 ## in case of 0, define hyperparameters below
 ## in case of 1, define parameter space below
 
 # are we interested in the plot? (0/1, overridden in case of grid search)
-plot = 0
+plot = 1
 
 # define global settings
 n_jobs = -1 # use all available cores
@@ -198,8 +201,16 @@ n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeserie
 
 if grid_search == 0:
     scores = []
-    for dyad in chosen_dyads: 
-        if clustering == 'dyad-wise':
+    if clustering == 'all':
+        matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
+                X, y, dyad=np.nan, session=np.nan, 
+                plot=plot, window_length=window_length, step_length=step_length, 
+                shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+        scores.append(
+                ['all', 'all', sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities]
+            )
+    elif clustering == 'dyad-wise':
+        for dyad in chosen_dyads: 
             matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
                 X, y, dyad=dyad, session=np.nan,
                 plot=plot, window_length=window_length, step_length=step_length, 
@@ -207,7 +218,8 @@ if grid_search == 0:
             scores.append(
                 [dyad, 'all', sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities]
             )
-        elif clustering == 'session-wise':
+    elif clustering == 'session-wise':
+        for dyad in chosen_dyads:
             # make variable for chosen sessions
             chosen_sessions = np.unique(sessions[dyads == dyad]) if which_session == 'all' else [which_session]
 
@@ -239,11 +251,26 @@ if grid_search == 1:
 
     scores = []
     i = 0
-    for dyad in chosen_dyads:
-        for shrinkage in params_shrinkage_combinations:
-            for kernel in params_kernel_combinations:
-                for n_clusters in params_n_clusters:
-                    if clustering == 'dyad-wise':
+    for shrinkage in params_shrinkage_combinations:
+        for kernel in params_kernel_combinations:
+            for n_clusters in params_n_clusters:
+                if clustering == 'all':
+                    i += 1
+                    print(f"Iteration {i}, parameters: shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
+                    try:
+                        matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
+                        X, y, dyad=dyad, session=np.nan,
+                        plot=plot, window_length=window_length, step_length=step_length,
+                        shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+                    except ValueError as e:
+                        print(f"Skipping due to error: {e}")
+                        continue
+                    scores.append(
+                        ['all', 'all', window_length, shrinkage, kernel, n_clusters, 
+                         sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities]
+                    )
+                elif clustering == 'dyad-wise':
+                    for dyad in chosen_dyads:
                         i += 1
                         print(f"Iteration {i}, parameters: dyad {dyad}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                         try:
@@ -252,14 +279,17 @@ if grid_search == 1:
                                 plot=plot, window_length=window_length, step_length=step_length,
                                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
                         except ValueError as e:
-                            print(f"Skipping due to error: {e}")  # Optional: print the error message
+                            print(f"Skipping due to error: {e}")  
                             continue
                         scores.append(
                             [dyad, 'all', window_length, shrinkage, kernel, n_clusters, 
                             sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities])
-                    elif clustering == 'session-wise':
+                elif clustering == 'session-wise':
+                    for dyad in chosen_dyads:
                         chosen_sessions = np.unique(sessions[dyads == dyad]) if which_session == 'all' else [which_session]
                         for session in chosen_sessions:
+                            i += 1
+                            print(f"Iteration {i}, parameters: dyad {dyad}, session {session}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                             try:
                                 matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
                                 X, y, dyad=dyad, session=np.nan,
