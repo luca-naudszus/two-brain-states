@@ -14,7 +14,7 @@ import pandas as pd
 from pyriemann.utils.mean import mean_riemann
 from pyriemann.utils.tangentspace import tangent_space
 from sklearn.decomposition import PCA
-from sklearn.metrics import rand_score
+from sklearn.metrics import adjusted_rand_score
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import StratifiedKFold
@@ -26,7 +26,7 @@ from riemannianKMeans import ListTimeSeriesWindowTransformer, HybridBlocks, Riem
 def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, metrics, n_clusters): 
     # ------------------------------------------------------------
     ### Get data
-    if clustering == 'all':
+    if clustering == 'full':
         X_tmp, y_tmp, sessions_tmp = X, y, sessions
         print(f"Data loaded: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
     elif clustering == 'dyad-wise':
@@ -52,6 +52,7 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
                                        shrinkage=shrinkage, 
                                        metrics=metrics
             )),
+            #TODO: Add option to demean matrices here
             ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
                 n_clusters = n_clusters, 
                 n_init = n_init))
@@ -61,6 +62,7 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
     # ------------------------------------------------------------
     ### Fit the models
     #TODO: Add Davis Bouldin index
+    #TODO: Include better indices
     pipeline_Riemannian.fit(X_tmp)
     sh_score_pipeline = riemannian_silhouette_score(pipeline_Riemannian)
     ch_score_pipeline = ch_score(pipeline_Riemannian)
@@ -74,8 +76,8 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
     classes = pipeline_Riemannian.named_steps["kmeans"].predict(matrices)
     trans_activities = pipeline_Riemannian.named_steps["windows"].transform_labels(X_tmp, y_tmp)
     trans_sessions = pipeline_Riemannian.named_steps["windows"].transform_labels(X_tmp, sessions_tmp)
-    rand_score_act = rand_score(classes, trans_activities)
-    rand_score_ses = rand_score(classes, trans_sessions)
+    rand_score_act = adjusted_rand_score(classes, trans_activities)
+    rand_score_ses = adjusted_rand_score(classes, trans_sessions)
 
     # ------------------------------------------------------------
     ### PCA 
@@ -85,7 +87,7 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
     X_pca = pca.fit_transform(X_tangent)
 
     # Plot
-    if plot == 1: 
+    if plot == 1 and grid_search == 0: 
         # With classes as labels
         plt.figure(figsize=(6, 5))
         for label in np.unique(classes): 
@@ -123,17 +125,18 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
 ### set arguments
 
 # which type of data are we interested in?
-type_of_data = "four_blocks_session"
+type_of_data = "one_brain_session"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
+#TODO: Accomodate dyad vs. participant for one-brain data
+#TODO: Find out why there is NA data in one_brain_session
 
 # how do we want to cluster?
-clustering = 'all' # all (does not work yet), dyad-wise, session-wise
-#TODO: implement clustering of all dyads
+clustering = 'session-wise' # full (does not work yet), dyad-wise, session-wise
 # which dyad do we want to look at? (only for dyad-wise and session-wise clustering)
-which_dyad = 'all' # set dyad = 'all' for all dyads
+which_dyad = 105 # set dyad = 'all' for all dyads
 # which session do we want to look at? (only for session-wise clustering)
-which_session = 'all' # set session = 'all' for all dyads
+which_session = 4 # set session = 'all' for all sessions
 
 # do we want to do a single run or a grid search? (0 = single run, 1 = grid search)
 grid_search = 0
@@ -201,7 +204,7 @@ n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeserie
 
 if grid_search == 0:
     scores = []
-    if clustering == 'all':
+    if clustering == 'full':
         matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
                 X, y, dyad=np.nan, session=np.nan, 
                 plot=plot, window_length=window_length, step_length=step_length, 
@@ -254,12 +257,12 @@ if grid_search == 1:
     for shrinkage in params_shrinkage_combinations:
         for kernel in params_kernel_combinations:
             for n_clusters in params_n_clusters:
-                if clustering == 'all':
+                if clustering == 'full':
                     i += 1
                     print(f"Iteration {i}, parameters: shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                     try:
                         matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
-                        X, y, dyad=dyad, session=np.nan,
+                        X, y, dyad=np.nan, session=np.nan,
                         plot=plot, window_length=window_length, step_length=step_length,
                         shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
                     except ValueError as e:
@@ -292,7 +295,7 @@ if grid_search == 1:
                             print(f"Iteration {i}, parameters: dyad {dyad}, session {session}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                             try:
                                 matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
-                                X, y, dyad=dyad, session=np.nan,
+                                X, y, dyad=dyad, session=session,
                                 plot=plot, window_length=window_length, step_length=step_length,
                                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
                             except ValueError as e:

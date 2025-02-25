@@ -39,7 +39,7 @@ for file in os.listdir(inpath):
 
         # test whether the recording has been broken
         #TODO: deal with broken recordings, n = 6,
-        # this would give six more individual session data and four mour dyad session data
+        # this would give six more individual session data and four more dyad session data
         if re.match(r"^.+_.{1}_pre\.fif$", file):
             error_log.append((file[:-8], 'recording is broken'))
             continue
