@@ -9,50 +9,79 @@ from datetime import datetime
 from itertools import product
 import matplotlib.pyplot as plt
 import numpy as np
-import sys
+import os
 import pandas as pd
 from pyriemann.utils.mean import mean_riemann
 from pyriemann.utils.tangentspace import tangent_space
 from sklearn.decomposition import PCA
-from sklearn.metrics import adjusted_rand_score
+from sklearn.metrics import adjusted_rand_score, davies_bouldin_score
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline, make_pipeline
-from riemannianKMeans import ListTimeSeriesWindowTransformer, HybridBlocks, RiemannianKMeans, ch_score, riemannian_silhouette_score
+from riemannianKMeans import Demeaner, FlattenTransformer, ListTimeSeriesWindowTransformer, HybridBlocks, RiemannianKMeans, ch_score, geodesic_distance_ratio, riemannian_davies_bouldin, riemannian_silhouette_score, riemannian_variance
 
+os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
 # ------------------------------------------------------------
 # define single analysis
-def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, metrics, n_clusters): 
+def pipeline(X, y, dyad, session, demean, demeaner_var, plot, window_length, step_length, shrinkage, metrics, n_clusters): 
     # ------------------------------------------------------------
     ### Get data
     if clustering == 'full':
-        X_tmp, y_tmp, sessions_tmp = X, y, sessions
+        X_tmp, y_tmp, sessions_tmp, dyads_tmp = X, y, sessions, dyads
         print(f"Data loaded: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
     elif clustering == 'dyad-wise':
         indices = np.where(dyads == dyad)[0]
-        X_tmp, y_tmp, sessions_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices]
+        X_tmp, y_tmp, sessions_tmp, dyads_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [dyads[i] for i in indices]
         print(f"Data loaded for dyad {dyad}: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
     elif clustering == 'session-wise':
         indices = np.where((dyads == dyad) & (sessions == session))[0]
-        X_tmp, y_tmp, sessions_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices]
+        X_tmp, y_tmp, sessions_tmp, dyads_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [dyads[i] for i in indices]
         assert len(indices) != 0, 'Dyad-session combination does not exist in data set.'
         print(f"Data loaded for dyad {dyad} and session {session}: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
+    # ------------------------------------------------------------
+    ### Segment into windows
+    #TODO: Adapt ListTimeSeriesWindowsTransformer with fit and transform. 
+    windowsTransformer = ListTimeSeriesWindowTransformer(
+                window_size = upsampling_freq*window_length,
+                step_size = upsampling_freq*step_length
+            )
+    X_seg = windowsTransformer.fit_transform(X_tmp)
+    trans_activities = windowsTransformer.transform(y_tmp)
+    trans_sessions = windowsTransformer.transform(sessions_tmp)
+    trans_dyads = windowsTransformer.transform(dyads_tmp)
+    if demean: 
+        if clustering == 'full': 
+            if demeaner_var == 'dyads':
+               groups = trans_dyads
+            elif demeaner_var == 'session-wise':
+                groups = trans_sessions
+            else: 
+                print("Warning: will not demean because demeaning mode is unclear.")
+        elif clustering == 'dyad-wise': 
+            if demeaner_var == 'session-wise':
+                groups = trans_sessions
+            elif demeaner_var == 'dyad-wise': 
+                print("Warning: will not demean dyad-wise because clustering is dyad-wise.")
+            else: 
+                print("Warning: will not demean because demeaning mode is unclear.")
+        elif clustering == 'session-wise': 
+            print("Warning: will not demean because clustering is session-wise.")
+    
     # ------------------------------------------------------------
     ### Set up the pipeline
 
     # Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
+    # TODO: Adapt Demeaner for this pipeline. 
     pipeline_Riemannian = Pipeline(
         [
-            ("windows", ListTimeSeriesWindowTransformer(
-                window_size = upsampling_freq*window_length,
-                step_size = upsampling_freq*step_length
-            )),
             ("block_kernels", HybridBlocks(block_size=block_size,
                                        shrinkage=shrinkage, 
                                        metrics=metrics
             )),
-            #TODO: Add option to demean matrices here
+            ("demeaner", Demeaner(activate=demean, 
+                                  groups=groups
+            )),
             ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
                 n_clusters = n_clusters, 
                 n_init = n_init))
@@ -60,24 +89,32 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
     )
 
     # ------------------------------------------------------------
-    ### Fit the models
-    #TODO: Add Davis Bouldin index
-    #TODO: Include better indices
-    pipeline_Riemannian.fit(X_tmp)
-    sh_score_pipeline = riemannian_silhouette_score(pipeline_Riemannian)
-    ch_score_pipeline = ch_score(pipeline_Riemannian)
-    print(f"Silhouette Score: {sh_score_pipeline}")
-    print(f"Calinski-Harabasz Score: {ch_score_pipeline}")
-
-    # # ------------------------------------------------------------
-    ### Predict labels and calculate Rand score
-    #TODO: adapt Rand scores for different clustering options
+    ### Fit the models and predict labels
+    pipeline_Riemannian.fit(X_seg)
     matrices = np.array(pipeline_Riemannian.named_steps["block_kernels"].matrices_)
     classes = pipeline_Riemannian.named_steps["kmeans"].predict(matrices)
-    trans_activities = pipeline_Riemannian.named_steps["windows"].transform_labels(X_tmp, y_tmp)
-    trans_sessions = pipeline_Riemannian.named_steps["windows"].transform_labels(X_tmp, sessions_tmp)
+    cluster_means = pipeline_Riemannian.named_steps["kmeans"].centroids()
+    clusters = [matrices[classes == i] for i in range(n_clusters)]
+    
+    # ------------------------------------------------------------
+    ### Clustering performance evaluation
+    sh_score_pipeline = riemannian_silhouette_score(pipeline_Riemannian)
+    ch_score_pipeline = ch_score(pipeline_Riemannian)
+    riem_var_pipeline = [riemannian_variance(clusters[i], cluster_means[i]) for i in range(n_clusters)]
+    db_score_pipeline = riemannian_davies_bouldin(clusters, cluster_means)
+    gdr_pipeline = geodesic_distance_ratio(clusters, cluster_means)
+    print(f"Silhouette Score: {sh_score_pipeline}")
+    print(f"Calinski-Harabasz Score: {ch_score_pipeline}")
+    print(f"Riemannian Variance: {riem_var_pipeline}")
+    print(f"Davies-Bouldin-Index: {db_score_pipeline}")
+    print(f"Geodesic Distance Ratio: {gdr_pipeline}")
+
+    # # ------------------------------------------------------------
+    ### Rand indices
+    rand_score_dyad = adjusted_rand_score(classes, trans_dyads) if clustering == 'all' else np.nan
+    rand_score_ses = adjusted_rand_score(classes, trans_sessions) if clustering != 'session-wise' else np.nan
     rand_score_act = adjusted_rand_score(classes, trans_activities)
-    rand_score_ses = adjusted_rand_score(classes, trans_sessions)
+    
 
     # ------------------------------------------------------------
     ### PCA 
@@ -119,24 +156,29 @@ def pipeline(X, y, dyad, session, plot, window_length, step_length, shrinkage, m
         plt.legend()
         plt.show()
     
-    return matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, len(sessions_tmp)
+    return matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_dyad, len(sessions_tmp)
 
 # ------------------------------------------------------------
 ### set arguments
 
 # which type of data are we interested in?
-type_of_data = "one_brain_session"
+type_of_data = "four_blocks"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 #TODO: Accomodate dyad vs. participant for one-brain data
 #TODO: Find out why there is NA data in one_brain_session
 
 # how do we want to cluster?
-clustering = 'session-wise' # full (does not work yet), dyad-wise, session-wise
+clustering = 'dyad-wise' # full (does not work yet), dyad-wise, session-wise
 # which dyad do we want to look at? (only for dyad-wise and session-wise clustering)
-which_dyad = 105 # set dyad = 'all' for all dyads
+which_dyad = 2014 # set dyad = 'all' for all dyads
 # which session do we want to look at? (only for session-wise clustering)
-which_session = 4 # set session = 'all' for all sessions
+which_session = 'all' # set session = 'all' for all sessions
+
+# should the matrices be demeaned? 
+demean = True
+# if so, within-dyad or within-session?
+demeaner_var = 'session-wise' # 'none', 'dyad-wise', 'session-wise'
 
 # do we want to do a single run or a grid search? (0 = single run, 1 = grid search)
 grid_search = 0
@@ -205,21 +247,23 @@ n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeserie
 if grid_search == 0:
     scores = []
     if clustering == 'full':
-        matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
-                X, y, dyad=np.nan, session=np.nan, 
+        matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_dyad, n_activities = pipeline(
+                X, y, dyad=np.nan, session=np.nan, demean=demean, demeaner_var=demeaner_var,
                 plot=plot, window_length=window_length, step_length=step_length, 
                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
         scores.append(
-                ['all', 'all', sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities]
+                ['all', 'all', sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, 
+                 rand_score_act, rand_score_ses, rand_score_dyad, n_activities]
             )
     elif clustering == 'dyad-wise':
         for dyad in chosen_dyads: 
-            matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
-                X, y, dyad=dyad, session=np.nan,
+            matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_dyad, n_activities = pipeline(
+                X, y, dyad=dyad, session=np.nan, demean=demean, demeaner_var=demeaner_var,
                 plot=plot, window_length=window_length, step_length=step_length, 
                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
             scores.append(
-                [dyad, 'all', sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities]
+                [dyad, 'all', sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, 
+                 rand_score_act, rand_score_ses, rand_score_dyad, n_activities]
             )
     elif clustering == 'session-wise':
         for dyad in chosen_dyads:
@@ -227,16 +271,17 @@ if grid_search == 0:
             chosen_sessions = np.unique(sessions[dyads == dyad]) if which_session == 'all' else [which_session]
 
             for session in chosen_sessions: 
-                matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
-                    X, y, dyad=dyad, session=session,
+                matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_dyad, n_activities = pipeline(
+                    X, y, dyad=dyad, session=session, demean=demean, demeaner_var=demeaner_var,
                     plot=plot, window_length=window_length, step_length=step_length, 
                     shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
                 scores.append(
-                    [dyad, session, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities]
+                    [dyad, session, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, 
+                     rand_score_act, rand_score_ses, rand_score_dyad, n_activities]
                 ) 
     scores = pd.DataFrame(scores, columns = [
-        'Dyad', 'Session', 'SilhouetteCoefficient', 'CalinskiHarabaszScore',
-        'RandScoreActivities', 'RandScoreSessions', 'nActivities']
+        'Dyad', 'Session', 'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
+        'RandScoreActivities', 'RandScoreSessions', 'RandScoreDyads', 'nActivities']
     )
         
 
@@ -261,8 +306,8 @@ if grid_search == 1:
                     i += 1
                     print(f"Iteration {i}, parameters: shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                     try:
-                        matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
-                        X, y, dyad=np.nan, session=np.nan,
+                        matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, db_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, rand_score_dyad, n_activities = pipeline(
+                        X, y, dyad=np.nan, session=np.nan, demean=demean, demeaner_var=demeaner_var,
                         plot=plot, window_length=window_length, step_length=step_length,
                         shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
                     except ValueError as e:
@@ -270,15 +315,16 @@ if grid_search == 1:
                         continue
                     scores.append(
                         ['all', 'all', window_length, shrinkage, kernel, n_clusters, 
-                         sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities]
+                         sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline,
+                         rand_score_act, rand_score_ses, rand_score_dyad, n_activities]
                     )
                 elif clustering == 'dyad-wise':
                     for dyad in chosen_dyads:
                         i += 1
                         print(f"Iteration {i}, parameters: dyad {dyad}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                         try:
-                            matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
-                                X, y, dyad=dyad, session=np.nan,
+                            matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, db_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, rand_score_dyad, n_activities = pipeline(
+                                X, y, dyad=dyad, session=np.nan, demean=demean, demeaner_var=demeaner_var,
                                 plot=plot, window_length=window_length, step_length=step_length,
                                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
                         except ValueError as e:
@@ -286,7 +332,8 @@ if grid_search == 1:
                             continue
                         scores.append(
                             [dyad, 'all', window_length, shrinkage, kernel, n_clusters, 
-                            sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities])
+                             sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline,
+                             rand_score_act, rand_score_ses, rand_score_dyad, n_activities])
                 elif clustering == 'session-wise':
                     for dyad in chosen_dyads:
                         chosen_sessions = np.unique(sessions[dyads == dyad]) if which_session == 'all' else [which_session]
@@ -294,8 +341,8 @@ if grid_search == 1:
                             i += 1
                             print(f"Iteration {i}, parameters: dyad {dyad}, session {session}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                             try:
-                                matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities = pipeline(
-                                X, y, dyad=dyad, session=session,
+                                matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, db_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, rand_score_dyad, n_activities = pipeline(
+                                X, y, dyad=dyad, session=session, demean=demean, demeaner_var=demeaner_var,
                                 plot=plot, window_length=window_length, step_length=step_length,
                                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
                             except ValueError as e:
@@ -306,13 +353,14 @@ if grid_search == 1:
                                 continue
                             scores.append(
                                 [dyad, session, window_length, shrinkage, kernel, n_clusters, 
-                            sh_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, n_activities])
+                                 sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline,
+                                rand_score_act, rand_score_ses, rand_score_dyad, n_activities])
     scores = pd.DataFrame(scores, columns=['Dyad', 'Session', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
-                                       'SilhouetteCoefficient', 'CalinskiHarabaszScore',
-                                       'RandScoreActivities', 'RandScoreSessions', 'nSessions'])
+                                       'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio'
+                                       'RandScoreActivities', 'RandScoreSessions', 'RandScoreDyads', 'nSessions'])
 
 # ------------------------------------------------------------
 ### save results
 print("saving results")
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-scores.to_csv(f"results/results_{timestamp}.csv", index=False)
+scores.to_csv(f"results/results_{type_of_data}_{timestamp}.csv", index=False)
