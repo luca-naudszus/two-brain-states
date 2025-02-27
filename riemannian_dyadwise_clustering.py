@@ -47,9 +47,9 @@ def pipeline(X, y, dyad, session, demean, demeaner_var, plot, window_length, ste
                 step_size = upsampling_freq*step_length
             )
     X_seg = windowsTransformer.fit_transform(X_tmp)
-    trans_activities = windowsTransformer.transform(y_tmp)
-    trans_sessions = windowsTransformer.transform(sessions_tmp)
-    trans_dyads = windowsTransformer.transform(dyads_tmp)
+    trans_activities = windowsTransformer.transform(y_tmp, is_labels=True)
+    trans_sessions = windowsTransformer.transform(sessions_tmp, is_labels=True)
+    trans_dyads = windowsTransformer.transform(dyads_tmp, is_labels=True)
     if demean: 
         if clustering == 'full': 
             if demeaner_var == 'dyads':
@@ -79,8 +79,8 @@ def pipeline(X, y, dyad, session, demean, demeaner_var, plot, window_length, ste
                                        shrinkage=shrinkage, 
                                        metrics=metrics
             )),
-            ("demeaner", Demeaner(activate=demean, 
-                                  groups=groups
+            ("demeaner", Demeaner(groups=groups, 
+                                  activate=demean,                  
             )),
             ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
                 n_clusters = n_clusters, 
@@ -91,7 +91,7 @@ def pipeline(X, y, dyad, session, demean, demeaner_var, plot, window_length, ste
     # ------------------------------------------------------------
     ### Fit the models and predict labels
     pipeline_Riemannian.fit(X_seg)
-    matrices = np.array(pipeline_Riemannian.named_steps["block_kernels"].matrices_)
+    matrices = np.array(pipeline_Riemannian.named_steps["demeaner"].matrices_)
     classes = pipeline_Riemannian.named_steps["kmeans"].predict(matrices)
     cluster_means = pipeline_Riemannian.named_steps["kmeans"].centroids()
     clusters = [matrices[classes == i] for i in range(n_clusters)]

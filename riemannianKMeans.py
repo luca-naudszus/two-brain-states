@@ -22,6 +22,7 @@ from pyriemann.utils.distance import distance_riemann, distance_wasserstein
 ker_est_functions = [
     "linear", "poly", "polynomial", "rbf", "laplacian", "cosine"
 ]
+from pyriemann.utils.base import expm, logm
 from pyriemann.utils.covariance import cov_est_functions
 from pyriemann.utils.mean import mean_riemann
 from scipy.linalg import block_diag
@@ -42,28 +43,23 @@ class WindowTransformer(BaseEstimator, TransformerMixin):
         self.step_size = step_size
 
     def fit(self, X, y=None):
-        #TODO: get all important values from X here to transform y in the next step
         return self
 
-    def transform(self, X, y=None, window_size=75, step_size=None):
-        assert isinstance(X, np.ndarray), "Input must be a NumPy array"
-        n_channels = X.shape[0]
-        assert X.ndim == 2 and (n_channels in {8, 16}), "Unexpected input shape" #TODO: accept different n_channels
-        n_samples = X.shape[1]
-        if self.step_size == None: 
-            n_windows = n_samples // self.window_size
-            truncated_length = n_windows * self.window_size
-            X_windows = X[:, :truncated_length].reshape(n_channels, n_windows, self.window_size)
-            X_windows = np.transpose(X_windows, (1, 0, 2))
-        else: 
-            n_windows = (n_samples - self.window_size) // self.step_size + 1
-            # Extract windows using a sliding approach
-            X_windows = np.array([X[:,i:i + self.window_size] for i in range(0, n_samples - self.window_size + 1, self.step_size)])
-        if y == None:
-            return X_windows
+    def transform(self, X, is_labels, n_windows, window_size=75, step_size=None):
+        if not is_labels:
+            assert isinstance(X, np.ndarray), "Input must be a NumPy array"
+            assert X.ndim == 2, "Unexpected input shape" 
+            if self.step_size == None: 
+                truncated_length = n_windows * self.window_size
+                n_channels = X.shape[0]
+                X_windows = X[:, :truncated_length].reshape(n_channels, n_windows, self.window_size)
+                X_windows = np.transpose(X_windows, (1, 0, 2))
+            else: 
+                n_samples = X.shape[1]
+                X_windows = np.array([X[:,i:i + self.window_size] for i in range(0, n_samples - self.window_size + 1, self.step_size)])
         else:
-            y = n_windows * [y]
-            return X_windows, y
+            X_windows = n_windows * [X]
+        return X_windows
 
 class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
     """Transforms a list of time series into non-overlapping windows of shape (n_channels, window_size). 
@@ -74,18 +70,23 @@ class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
         self.base_transformer = WindowTransformer(window_size, step_size)
 
     def fit(self, X, y=None):
-        #TODO: get all important values from X here to transform y in the next step
+        assert isinstance(X, list), "Input must be a list of NumPy arrays"
+        list_windows = []
+        for x in X: 
+            n_samples = x.shape[1]
+            if self.step_size == None: 
+                n_windows = n_samples // self.window_size
+            else: 
+                n_windows = (n_samples - self.window_size) // self.step_size + 1
+            list_windows.append(n_windows)
+        self.list_windows_ = list_windows
         return self
     
-    def transform(self, X, y=None):
+    def transform(self, X, is_labels=False):
         assert isinstance(X, list), "Input must be a list of NumPy arrays"
-        if y == None:
-            transformed_x = [self.base_transformer.transform(x) for x in X]
-            return np.concatenate(transformed_x, axis = 0)
-        else:
-            transformed_x, transformed_y = list(zip(*[self.base_transformer.transform(x, y_i) for x, y_i in zip(X, y)]))
-            return np.concatenate(transformed_x, axis = 0), np.concatenate(transformed_y, axis = 0)
-
+        transformed_x = [self.base_transformer.transform(x, is_labels, self.list_windows_[i]) for i, x in enumerate(X)]
+        return np.concatenate(transformed_x, axis = 0)
+    
 class Stacker(TransformerMixin):
     """Stacks values of a DataFrame column into a 3D array. Author: Tim Näher."""
     def fit(self, X, y=None):
@@ -149,7 +150,7 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
     --------
     BlockCovariances
     
-    Author: Tim Näher. Small adaptations by Luca Naudszus. 
+    Author: Tim Näher. 
     """
 
     def __init__(self, block_size, metrics="linear", shrinkage=0,
@@ -295,7 +296,7 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
 
         return self
 
-    def transform(self, X, y=None):
+    def transform(self, X):
         """Estimate block kernel or covariance matrices.
 
         Parameters
@@ -338,7 +339,7 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
             for i in range(X.shape[0])
         ])
         self.matrices_ = M_matrices
-        return M_matrices, y
+        return M_matrices
 
     def _prepare_dataframe(self, X):
         """Converts the data into a df with eac hblock as column."""
@@ -350,18 +351,28 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
 class Demeaner(BaseEstimator, TransformerMixin):
     """Demeans SPD matrices. 
         Author: Luca Naudszus."""
-    def __init__(self, activate=False):
+    def __init__(self, groups, activate=False):
         self.activate = activate
+        self.groups = groups
 
     def fit(self, X, y=None):
         return self
     
-    def transform(self, X, y=None):
-        print(X)
-        if self.activate and y != None:
-            X_grouped = [[X[i] for i, value in enumerate(y) if value == y_i] for y_i in set(y)]
+    def transform(self, X):
+        #TODO: We have implemented log-Euclidean centering. 
+        # I would rather use projection to SPD (faster but less accurate) 
+        # or tangent space centering (faster and accurate)!
+        if self.activate:
+            # compute mean matrix per group
+            X_grouped = [[X[i] for i, value in enumerate(self.groups) if value == y_i] for y_i in set(self.groups)]
             X_means = [mean_riemann(np.stack(x)) for x in X_grouped]
-            X_out = np.stack([matrix - X_means[list(set(y)).index(y[i])] for i, matrix in enumerate(X)])[0]
+            # transform to log-space
+            X_log = [logm(X_i) for X_i in X]
+            X_logmean = [logm(X_i) for X_i in X_means]
+            X_centered_log = [X_log[i] - X_logmean[list(set(self.groups)).index(self.groups[i])] for i in range(len(X))]
+            # transform back
+            X_out = np.stack([expm(X_centered_log[i]) for i in range(len(X))])
+            self.matrices_ = X_out
             return X_out
         else:
             return X
@@ -370,6 +381,7 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
     """Wrapper for pyriemann.clustering.KMeans for usage in GridSearchCV. 
         Author: Luca Naudszus."""
     #TODO: Test if this wrapper is necessary. 
+    #TODO: Set init method to kmeans++
     def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter, n_init = 100):
         self.n_clusters = n_clusters
         self.n_jobs = n_jobs
@@ -386,17 +398,16 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
         return self.kmeans.centroids()     
 
     def fit(self, X, y=None):
-        print(X)
         print(f"Fitting data with shape {X.shape}, using {self.n_init} random initializations")
         self.kmeans.fit(X)
         self.labels_ = self.kmeans.labels_
         return self
 
-    def predict(self, X, y=None):
+    def predict(self, X):
         print(f"Predicting data with shape {X.shape}")
         return self.kmeans.predict(X)
 
-    def fit_predict(self, X, y=None):
+    def fit_predict(self, X):
         return self.fit(X).labels_
 
 def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_riemann): 
