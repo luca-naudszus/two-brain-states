@@ -25,30 +25,49 @@ os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translation
 # ------------------------------------------------------------
 # define single analysis
 def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, window_length, step_length, shrinkage, metrics, n_clusters): 
+    
     # ------------------------------------------------------------
     ### Get data
+    #TODO: implement channel variable in preparations tool
     if clustering == 'full':
-        X_tmp, y_tmp, sessions_tmp, ids_tmp = X, y, sessions, ids
+        X_tmp, y_tmp, sessions_tmp, ids_tmp, channels_tmp = X, y, sessions, ids, channels
         print(f"Data loaded: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
     elif clustering == 'id-wise':
         indices = np.where(ids == id)[0]
-        X_tmp, y_tmp, sessions_tmp, ids_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices]
+        X_tmp, y_tmp, sessions_tmp, ids_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [channels[i] for i in indices]
         print(f"Data loaded for id {id}: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
     elif clustering == 'session-wise':
         indices = np.where((ids == id) & (sessions == session))[0]
-        X_tmp, y_tmp, sessions_tmp, ids_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices]
+        X_tmp, y_tmp, sessions_tmp, ids_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [channels[i] for i in indices]
         assert len(indices) != 0, 'ID-session combination does not exist in data set.'
         print(f"Data loaded for id {id} and session {session}: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
+    
     # ------------------------------------------------------------
-    ### Segment into windows
+    ### Group by number of channels and segment into windows
+    
+    grouping_indices = [[np.where(np.array(channels_tmp) == channel_no)[0]] for channel_no in set(channels_tmp)]
     windowsTransformer = ListTimeSeriesWindowTransformer(
                 window_size = upsampling_freq*window_length,
                 step_size = upsampling_freq*step_length
             )
-    X_seg = windowsTransformer.fit_transform(X_tmp)
-    trans_activities = windowsTransformer.transform(y_tmp, is_labels=True)
-    trans_sessions = windowsTransformer.transform(sessions_tmp, is_labels=True)
-    trans_ids = windowsTransformer.transform(ids_tmp, is_labels=True)
+    
+    # Group variables
+    X_grouped = [[X_tmp[i] for i in ind[0]] for ind in grouping_indices]
+    activities_grouped = [[y_tmp[i] for i in ind[0]] for ind in grouping_indices]
+    sessions_grouped = [[sessions_tmp[i] for i in ind[0]] for ind in grouping_indices]
+    ids_grouped = [[ids_tmp[i] for i in ind[0]] for ind in grouping_indices]
+    
+    # Fit transformer
+    X_seg, activities_seg, sessions_seg, ids_seg = [], [], [], []
+    
+    # Transform into windows
+    for in_channelgroup in range(0, len(X_grouped)):
+        X_seg.append(windowsTransformer.fit_transform(X_grouped[in_channelgroup]))
+        activities_seg.append(windowsTransformer.transform(activities_grouped[in_channelgroup]), is_labels=True)
+        sessions_seg.append(windowsTransformer.transform(sessions_grouped[in_channelgroup]), islabels=True)
+        ids_seg.append(windowsTransformer.transform(ids_grouped[in_channelgroup]), islabels=True)
+    
+    # Set group variables for demeaner
     if demean: 
         if clustering == 'full': 
             if demeaner_var == 'ids':
@@ -68,31 +87,29 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
             print("Warning: will not demean because clustering is session-wise.")
     
     # ------------------------------------------------------------
-    ### Set up the pipeline
-
-    # Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
-    pipeline_Riemannian = Pipeline(
-        [
-            ("block_kernels", HybridBlocks(block_size=block_size,
-                                       shrinkage=shrinkage, 
-                                       metrics=metrics
-            )),
-            ("demeaner", Demeaner(groups=groups, 
-                                  activate=demean,   
-                                  method=demeaner_method               
-            )),
-            ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
-                n_clusters = n_clusters, 
-                n_init = n_init))
-        ], verbose = True
-    )
+    ### Get kernel matrices with HybridBlocks
+    block_kernels = HybridBlocks(block_size=block_size,
+                                 shrinkage=shrinkage,
+                                 metrics=metrics)
+    matrices = [block_kernels.fit_transform(X_seg[in_channelgroup]) for in_channelgroup in range(0, len(X_seg))]
 
     # ------------------------------------------------------------
-    ### Fit the models and predict labels
-    pipeline_Riemannian.fit(X_seg)
-    matrices = np.array(pipeline_Riemannian.named_steps["demeaner"].matrices_)
-    classes = pipeline_Riemannian.named_steps["kmeans"].predict(matrices)
-    cluster_means = pipeline_Riemannian.named_steps["kmeans"].centroids()
+    ### TODO: Make array with common dimensions
+    X_common = matrices
+
+    # ------------------------------------------------------------
+    demeaner = Demeaner(groups=groups,
+                        activate=demean,
+                        method=demeaner_method)
+    matrices = demeaner.fit_transform(X_common)
+
+    # ------------------------------------------------------------
+    ### KMeans
+    kmeans = RiemannianKMeans(n_jobs=n_jobs,
+                              n_clusters=n_clusters,
+                              n_init=n_init)
+    classes = kmeans.fit_predict(matrices)
+    cluster_means = kmeans.centroids()
     clusters = [matrices[classes == i] for i in range(n_clusters)]
     
     # ------------------------------------------------------------
@@ -161,7 +178,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
 ### set arguments
 
 # which type of data are we interested in?
-type_of_data = "one_brain"
+type_of_data = "two_blocks"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 
@@ -169,9 +186,9 @@ type_of_data = "one_brain"
 # Choose from 'full', 'id-wise', 'session-wise'
 clustering = 'id-wise' 
 # Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
-which_id = 'all' # set which_id = 'all' for all dyads/participants
+which_id = 2014 # set which_id = 'all' for all dyads/participants
 # Which session do we want to look at? (only for session-wise clustering)
-which_session = 'all' # set which_session = 'all' for all sessions
+which_session = 5 # set which_session = 'all' for all sessions
 
 # should the matrices be demeaned? 
 demean = True
