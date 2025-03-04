@@ -7,7 +7,7 @@ from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.utils.validation import check_is_fitted
 from sklearn.pipeline import Pipeline, make_pipeline
-
+from collections import defaultdict
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
 
 import pyriemann
@@ -22,7 +22,7 @@ from pyriemann.utils.distance import distance_riemann, distance_wasserstein
 ker_est_functions = [
     "linear", "poly", "polynomial", "rbf", "laplacian", "cosine"
 ]
-from pyriemann.utils.base import expm, logm
+from pyriemann.utils.base import expm, logm, sqrtm
 from pyriemann.utils.covariance import cov_est_functions
 from pyriemann.utils.mean import mean_riemann
 from scipy.linalg import block_diag
@@ -351,37 +351,54 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
 class Demeaner(BaseEstimator, TransformerMixin):
     """Demeans SPD matrices. 
         Author: Luca Naudszus."""
-    def __init__(self, groups, activate=False):
+    def __init__(self, groups, method="tangent", activate=False):
         self.activate = activate
         self.groups = groups
+        self.method = method # "log-euclidean", "tangent", "projection", "airm"
 
     def fit(self, X, y=None):
         return self
     
     def transform(self, X):
-        #TODO: We have implemented log-Euclidean centering. 
-        # I would rather use projection to SPD (faster but less accurate) 
-        # or tangent space centering (faster and accurate)!
         if self.activate:
-            # compute mean matrix per group
-            X_grouped = [[X[i] for i, value in enumerate(self.groups) if value == y_i] for y_i in set(self.groups)]
-            X_means = [mean_riemann(np.stack(x)) for x in X_grouped]
-            # transform to log-space
-            X_log = [logm(X_i) for X_i in X]
-            X_logmean = [logm(X_i) for X_i in X_means]
-            X_centered_log = [X_log[i] - X_logmean[list(set(self.groups)).index(self.groups[i])] for i in range(len(X))]
-            # transform back
-            X_out = np.stack([expm(X_centered_log[i]) for i in range(len(X))])
-            self.matrices_ = X_out
-            return X_out
+            if self.method == 'log-euclidean':
+                print("Demeaning matrices by log-euclidean centering")
+            elif self.method == 'tangent':
+                print("Demeaning matrices by tangent space centering")
+            elif self.method == 'projection':
+                print("Demeaning matrices by projection to SPD after euclidean centering")
+            elif self.method == 'airm':
+                print("Demeaning matrices using AIRM-centered tangent space")
+            else:
+                raise ValueError("Invalid method. Choose from 'log-euclidean', 'tangent', 'projection', or 'airm'.")
+            
+            unique_labels = np.unique(self.groups)
+            demeaned_matrices = np.empty_like(X)
+            
+            for label in unique_labels:
+                indices = np.where(self.groups == label)[0]
+                group_matrices = X[indices]
+                if self.method == 'log-euclidean':
+                    demeaned_group = log_euclidean_centering(group_matrices)
+                elif self.method == 'tangent':
+                    demeaned_group = tangent_space_centering(group_matrices)
+                elif self.method == 'projection':
+                    demeaned_group = euclidean_centering_with_projection(group_matrices)
+                elif self.method == 'airm':
+                    demeaned_group = airm_centering(group_matrices)
+                else:
+                    raise ValueError("Invalid method. Choose from 'log-euclidean', 'tangent', 'projection', or 'airm'.")
+                demeaned_matrices[indices] = demeaned_group
+            
+            self.matrices_ = demeaned_matrices
+            
+            return demeaned_matrices
         else:
             return X
 
 class RiemannianKMeans(BaseEstimator, ClusterMixin):
-    """Wrapper for pyriemann.clustering.KMeans for usage in GridSearchCV. 
+    """Wrapper for pyriemann.clustering.KMeans.  
         Author: Luca Naudszus."""
-    #TODO: Test if this wrapper is necessary. 
-    #TODO: Set init method to kmeans++
     def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter, n_init = 100):
         self.n_clusters = n_clusters
         self.n_jobs = n_jobs
@@ -506,3 +523,84 @@ def riemannian_davies_bouldin(clusters, means):
         db_values.append(max_ratio)
     
     return np.mean(db_values)
+
+def tangent_space_centering(spd_matrices, reference=None):
+    """
+    Demeans SPD matrices in the tangent space at a chosen reference matrix.
+
+    Parameters:
+    - spd_matrices: list of (n, n) SPD matrices.
+    - reference: (n, n) SPD matrix (optional). Defaults to Euclidean mean.
+
+    Returns:
+    - Centered SPD matrices.
+    """
+    n_matrices = len(spd_matrices)
+    # Compute reference if not provided (Euclidean mean by default)
+    if reference is None:
+        reference = sum(spd_matrices) / n_matrices
+    ref_sqrt = sqrtm(reference)
+    ref_inv_sqrt = np.linalg.inv(ref_sqrt)
+    # Project matrices to tangent space
+    log_matrices = [ref_inv_sqrt @ logm(ref_inv_sqrt @ X @ ref_inv_sqrt) @ ref_inv_sqrt for X in spd_matrices]
+    # Compute mean in tangent space
+    log_mean = sum(log_matrices) / n_matrices
+    # Demean and project back to SPD space
+    spd_centered = [ref_sqrt @ expm(ref_sqrt @ (log_X - log_mean) @ ref_sqrt) @ ref_sqrt for log_X in log_matrices]
+    return spd_centered
+
+def project_to_spd(matrix):
+    """
+    Projects a matrix onto the SPD space by setting negative eigenvalues to a small positive value.
+    """
+    eigvals, eigvecs = np.linalg.eigh(matrix)
+    eigvals = np.maximum(eigvals, 1e-6)  # Ensure SPD by making all eigenvalues positive
+    return eigvecs @ np.diag(eigvals) @ eigvecs.T
+
+def euclidean_centering_with_projection(spd_matrices):
+    """
+    Demeans SPD matrices using Euclidean mean and projects back to SPD space.
+
+    Parameters:
+    - spd_matrices: list of (n, n) SPD matrices.
+
+    Returns:
+    - Centered SPD matrices.
+    """
+    n_matrices = len(spd_matrices)
+    # Compute Euclidean mean
+    mean_matrix = sum(spd_matrices) / n_matrices
+    # Demean and project back to SPD space
+    spd_centered = [project_to_spd(X - mean_matrix) for X in spd_matrices]
+    return spd_centered
+
+def airm_centering(spd_matrices):
+    """
+    Demeans SPD matrices using Affine-Invariant Riemannian Mean (AIRM) as the reference.
+
+    Parameters:
+    - spd_matrices: list of (n, n) SPD matrices.
+
+    Returns:
+    - Centered SPD matrices.
+    """
+    n_matrices = len(spd_matrices)
+    # Compute the Riemannian mean using pyriemann
+    reference = mean_riemann(spd_matrices)
+    ref_sqrt = sqrtm(reference)
+    ref_inv_sqrt = np.linalg.inv(ref_sqrt)
+    # Project matrices to tangent space
+    log_matrices = [ref_inv_sqrt @ logm(ref_inv_sqrt @ X @ ref_inv_sqrt) @ ref_inv_sqrt for X in spd_matrices]
+    # Compute mean in tangent space
+    log_mean = sum(log_matrices) / n_matrices
+    # Demean and project back to SPD space
+    spd_centered = [ref_sqrt @ expm(ref_sqrt @ (log_X - log_mean) @ ref_sqrt) @ ref_sqrt for log_X in log_matrices]
+    return spd_centered
+
+def log_euclidean_centering(spd_matrices):
+    reference = mean_riemann(spd_matrices)
+    ref_log = logm(reference)
+    log_matrices = [logm(X) for X in spd_matrices]
+    demeaned_matrices = [log_X - ref_log for log_X in log_matrices]
+    spd_centered = [expm(ref_log + matrix) for matrix in demeaned_matrices]
+    return spd_centered

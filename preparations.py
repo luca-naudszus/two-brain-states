@@ -37,6 +37,10 @@ for file in os.listdir(inpath):
         pID = int(file[4:7])
         session_n = int(file[-9:-8])
 
+        if (pID == 107) and (session_n == 3):
+            error_log.append((file[:-8], 'manually excluding 107-3 for bad channel'))
+            continue
+
         # test whether the recording has been broken
         #TODO: deal with broken recordings, n = 6,
         # this would give six more individual session data and four more dyad session data
