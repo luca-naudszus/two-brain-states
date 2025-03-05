@@ -24,10 +24,16 @@ dyads = pd.read_csv(str(path + "dyadList.csv"))
 ### get list of activity durations (here extracted from video data)
 cutpoints = pd.read_excel(str(path + "cutpoints_videos.xlsx"))
 
+### get channels csv
+best_channels = pd.read_csv(str(path + 'fNIRS_chs_ROIproximal.csv'))
+expected_rois = {'l_ifg', 'l_tpj', 'r_ifg', 'r_tpj'}
+
+too_many_zeros = 100
 current_freq = 5
 verbosity = 40 #ERRORS and CRITICAL, but not WARNING, INFO, DEBUG
 
 all_dict = {}
+roi_dict = {}
 error_log = []
 for file in os.listdir(inpath):
     if file.endswith(".fif"):
@@ -51,12 +57,12 @@ for file in os.listdir(inpath):
         chs = data.info['ch_names']
         assert len(chs) == len(set(chs)), f"Duplicate channels for {file[:-8]}"
         assert len(chs) != 0, f"No channels for {file[:-8]}"
-        if len(chs) != 8: 
-            #TODO: deal with missing recordings, n = 232, 
-            # this would involve implementing the whole pipeline for smaller matrices and then projecting into lower-dimensional space
-            # or use methods based on Bures-Wasserstein distance; probably infeasible
-            error_log.append((file[:-8], 'no channel for one or multiple ROIs'))
-            continue
+        best_chs = best_channels[(best_channels.ID == pID) & (best_channels.session == session_n)]
+        # get ROIs (for some reason, channels in best_chs and data are different)
+        #base_chs = pd.Series(chs).str.replace(r' (hbo|hbr)$', '', regex=True)
+        #channel_to_ROI = dict(zip(best_chs['channel'], best_chs['ROI']))
+        #ROI_array = pd.Series(base_chs).map(channel_to_ROI)
+        ROI_list = list(set(best_chs.ROI))
 
         # check whether there are enough onsets recorded
         if len(data.annotations) < 4:
@@ -90,7 +96,7 @@ for file in os.listdir(inpath):
         # write into dictionary
         keyname = file[:-8]
         all_dict[keyname] = epoch_list
-
+        roi_dict[keyname] = ROI_list + ROI_list
 
 # align onsets
 # To this end, we move outside the snirf structure and work only on the timeseries.
@@ -112,6 +118,7 @@ for key in key_list:
     partner_key = f'sub-{partnerID}_session-{session_n}'
 
     if partner_key in all_dict:
+        valid_data = True
         partner = all_dict[partner_key]
         target_list = []
         partner_list = []
@@ -124,17 +131,26 @@ for key in key_list:
             partner_interp = []
             target_epoch = target[in_epoch]
             target_ts = target_epoch.get_data(copy = False, verbose=verbosity)[0]
+            if np.isnan(target_ts).sum() > 0 or (target_ts == 0).sum() > too_many_zeros: 
+                error_log.append((f'sub-{targetID}_session-{session_n}', 'nans or too many zeros in data'))
+                error_log.append((partner_key, 'nans or too many zeros in partner data'))
+                valid_data = False
+                break
             partner_epoch = partner[in_epoch]
             partner_ts = partner_epoch.get_data(copy = False, verbose=verbosity)[0]
+            if np.isnan(partner_ts).sum() > 0 or (partner_ts == 0).sum() > too_many_zeros: 
+                error_log.append((f'sub-{targetID}_session-{session_n}', 'nans or too many zeros in partner data'))
+                error_log.append((partner_key, 'nans or too many zeros in data'))
+                valid_data = False
+                break
             original_lengths.append(
                 [targetID, partnerID, session_n, in_epoch, np.shape(target_ts)[1], np.shape(partner_ts)[1]])
             # Find out which duration is longer, this will be the duration at which we aim.
-
             if np.shape(target_ts)[1] > np.shape(partner_ts)[1]:
                 # interpolate partner timeseries to length of target time series
                 x_axis = np.arange(np.shape(partner_ts)[1])
-                partner_interp = np.copy(target_ts)
-                for in_channel in range(0, 8):
+                partner_interp = np.zeros([partner_ts.shape[0], target_ts.shape[1]])
+                for in_channel in range(0, len(partner_ts)):
                     partner_interp[in_channel] = sp.interpolate.CubicSpline(x_axis, partner_ts[in_channel])(np.linspace(x_axis.min(), x_axis.max(), np.shape(target_ts)[1]))
                 # keep target timeseries
                 target_interp = np.copy(target_ts)
@@ -142,9 +158,9 @@ for key in key_list:
                 duration_list.append(np.shape(target_interp)[1]/current_freq)
             elif np.shape(partner_ts)[1] > np.shape(target_ts)[0]:
                 x_axis = np.arange(np.shape(target_ts)[1])
-                target_interp = np.copy(partner_ts)
+                target_interp = np.zeros([target_ts.shape[0], partner_ts.shape[1]])
                 # interpolate target timeseries to length of partner time series
-                for in_channel in range(0, 8):
+                for in_channel in range(0, len(target_ts)):
                     target_interp[in_channel] = sp.interpolate.CubicSpline(x_axis, target_ts[in_channel])(np.linspace(x_axis.min(), x_axis.max(), np.shape(partner_ts)[1]))
                 # keep partner timeseries
                 partner_interp = np.copy(partner_ts)
@@ -183,17 +199,22 @@ for key in key_list:
             target_list.append(target_interp)
             partner_list.append(partner_interp)
 
+        # remove partner from key_list because they have been interpolated
+        key_list.remove(partner_key)
+
+        if not valid_data:
+            continue
         # update dictionaries
         data_dict[key] = {
             'interpolation': target_list,
             'duration': duration_list,
-            'true_duration': true_duration_list}
+            'true_duration': true_duration_list,
+            'rois': roi_dict[key]}
         data_dict[partner_key] = {
             'interpolation': partner_list,
             'duration': duration_list,
-            'true_duration_list': true_duration_list}
-        # remove partner from key_list because they have been interpolated
-        key_list.remove(partner_key)
+            'true_duration_list': true_duration_list,
+            'rois': roi_dict[partner_key]}
 
     else: 
         target_list = []
@@ -232,7 +253,8 @@ for key in key_list:
         data_dict[key] = {
             'interpolation': target_list,
             'duration': duration_list,
-            'true_duration': true_duration_list}
+            'true_duration': true_duration_list,
+            'rois': roi_dict[key]}
         
         error_log.append((f'sub-{targetID}_session-{session_n}', 'partner data missing'))
 
@@ -252,6 +274,8 @@ ts_one_brain, ts_two_blocks, ts_four_blocks = [], [], []
 ts_one_brain_session, ts_two_blocks_session, ts_four_blocks_session = [], [], []
 doc_one_brain, doc_two_blocks, doc_four_blocks = [], [], []
 doc_one_brain_session, doc_two_blocks_session, doc_four_blocks_session = [], [], []
+rois_one_brain, rois_two_blocks, rois_four_blocks = [], [], []
+rois_one_brain_session, rois_two_blocks_session, rois_four_blocks_session = [], [], []
 key_list = set(data_dict.keys())
 for i, row in dyads.iterrows():
     for session in range(6):
@@ -259,6 +283,7 @@ for i, row in dyads.iterrows():
         
         if target_key in key_list: 
             target_list = data_dict[target_key]['interpolation']
+            target_rois = data_dict[target_key]['rois']
             partner_key = f"sub-{row['pID2']}_session-{session + 1}"
             ts_target_temp, ts_partner_temp, ts_two_temp, ts_four_temp = [], [], [], []
             for activity in range(4):
@@ -268,29 +293,34 @@ for i, row in dyads.iterrows():
                 # 1a target, one brain data (two blocks: HbO + HbR), channel-wise z-scored
                 ts_one_brain.append(target_ts)
                 doc_one_brain.extend([[row['pID1'], session, activity]])
+                rois_one_brain.append(target_rois)
                 ts_target_temp.append(target_ts)
             
                 if partner_key in key_list: 
                     
                     partner_list = data_dict[partner_key]['interpolation']
+                    partner_rois = data_dict[partner_key]['rois']
                     partner_ts = partner_list[activity]
                     # channel-wise z-scoring
                     partner_ts = sp.stats.zscore(partner_ts, axis=1, ddof=1)
                     # 1a partner, one brain data (two blocks: HbO + HbR), channel-wise z-scored
                     ts_one_brain.append(partner_ts)
                     doc_one_brain.extend([[row['pID2'], session, activity]])
+                    rois_one_brain.append(partner_rois)
                     ts_partner_temp.append(partner_ts)
                     
                     # 2a, two blocks: target + partner, channel-wise z-scored
                     ts_two = np.concatenate((target_ts, partner_ts), axis = 0)         
                     ts_two_blocks.append(ts_two)
                     doc_two_blocks.extend([[row['dyadID'], session, activity]])
+                    rois_two_blocks.append(target_rois + partner_rois)
                     ts_two_temp.append(ts_two)
                     
                     # 3a, four blocks: target HbO, partner HbO, target HbR, partner HbR
-                    ts_four = np.concatenate((target_ts[:4], partner_ts[:4], target_ts[4:8], partner_ts[4:8]), axis=0)
+                    ts_four = np.concatenate((target_ts[:int(len(target_rois)/2)], partner_ts[:int(len(partner_rois)/2)], target_ts[int(len(target_rois)/2):len(target_rois)], partner_ts[int(len(partner_rois)/2):len(partner_rois)]), axis=0)
                     ts_four_blocks.append(ts_four)
                     doc_four_blocks.extend([[row['dyadID'], session, activity]])
+                    rois_four_blocks.append(target_rois + partner_rois)
                     ts_four_temp.append(ts_four)
             # 1b target, one brain data as above, channel- and session-wise z-scored
             ## session-wise z-scoring
@@ -302,6 +332,7 @@ for i, row in dyads.iterrows():
             for activity in range(4):
                 ts_one_brain_session.append(ts_target_split[activity])
                 doc_one_brain_session.extend([[row['pID1'], session, activity]])
+                rois_one_brain_session.append(target_rois)
             if partner_key in key_list: 
                 ## session-wise z-scoring
                 n_samples = [ts.shape[1] for ts in ts_partner_temp]
@@ -320,12 +351,15 @@ for i, row in dyads.iterrows():
                     # 1b partner, one brain data as above, channel- and session-wise z-scored
                     ts_one_brain_session.append(ts_partner_split[activity])
                     doc_one_brain_session.extend([[row['pID2'], session, activity]])
+                    rois_one_brain_session.append(partner_rois)
                     # 2b, two blocks as above, channel- and session-wise z-scored
                     ts_two_blocks_session.append(ts_two_split[activity])
                     doc_two_blocks_session.extend([[row['dyadID'], session, activity]])
+                    rois_two_blocks_session.append(target_rois + partner_rois)
                     # 3b, four blocks as above, channel- and session-wise z-scored
                     ts_four_blocks_session.append(ts_four_split[activity])
                     doc_four_blocks_session.extend([[row['dyadID'], session, activity]])
+                    rois_four_blocks_session.append(target_rois + partner_rois)
 
 doc_one_brain = pd.DataFrame(doc_one_brain)
 doc_two_blocks = pd.DataFrame(doc_two_blocks)
@@ -337,13 +371,19 @@ doc_four_blocks_session = pd.DataFrame(doc_four_blocks_session)
 # save
 doc_one_brain.to_csv(str(path + 'doc_one_brain.csv'))
 np.savez(str(path + 'ts_one_brain'), *ts_one_brain)
+np.savez(str(path + 'rois_one_brain'), *rois_one_brain)
 doc_two_blocks.to_csv(str(path + 'doc_two_blocks.csv'))
 np.savez(str(path + 'ts_two_blocks'), *ts_two_blocks)
+np.savez(str(path + 'rois_two_blocks'), *rois_two_blocks)
 doc_four_blocks.to_csv(str(path + 'doc_four_blocks.csv'))
 np.savez(str(path + 'ts_four_blocks'), *ts_four_blocks)
+np.savez(str(path + 'rois_four_blocks'), *rois_four_blocks)
 doc_one_brain_session.to_csv(str(path + 'doc_one_brain_session.csv'))
 np.savez(str(path + 'ts_one_brain_session'), *ts_one_brain_session)
+np.savez(str(path + 'rois_one_brain_session'), *rois_one_brain_session)
 doc_two_blocks_session.to_csv(str(path + 'doc_two_blocks_session.csv'))
 np.savez(str(path + 'ts_two_blocks_session'), *ts_two_blocks_session)
+np.savez(str(path + 'rois_two_blocks_session'), *rois_two_blocks_session)
 doc_four_blocks_session.to_csv(str(path + 'doc_four_blocks_session.csv'))
 np.savez(str(path + 'ts_four_blocks_session'), *ts_four_blocks_session)
+np.savez(str(path + 'rois_four_blocks_session'), *rois_four_blocks_session)

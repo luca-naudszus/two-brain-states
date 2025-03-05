@@ -22,10 +22,11 @@ from pyriemann.utils.distance import distance_riemann, distance_wasserstein
 ker_est_functions = [
     "linear", "poly", "polynomial", "rbf", "laplacian", "cosine"
 ]
-from pyriemann.utils.base import expm, logm, sqrtm
+from pyriemann.utils.base import expm, invsqrtm, logm, sqrtm
 from pyriemann.utils.covariance import cov_est_functions
 from pyriemann.utils.mean import mean_riemann
 from scipy.linalg import block_diag
+from sklearn.decomposition import PCA
 
 # ------------------------------------------------------------
 # define constant values
@@ -83,7 +84,6 @@ class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
         return self
     
     def transform(self, X, is_labels=False):
-        assert isinstance(X, list), "Input must be a list of NumPy arrays"
         transformed_x = [self.base_transformer.transform(x, is_labels, self.list_windows_[i]) for i, x in enumerate(X)]
         return np.concatenate(transformed_x, axis = 0)
     
@@ -151,6 +151,7 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
     BlockCovariances
     
     Author: Tim Näher. 
+    Adaptations by Luca A. Naudszus. 
     """
 
     def __init__(self, block_size, metrics="linear", shrinkage=0,
@@ -310,6 +311,7 @@ class HybridBlocks(BaseEstimator, TransformerMixin):
             Block diagonal matrices (kernel or covariance matrices).
         """
         check_is_fitted(self, 'preprocessor')
+        print(f'Estimating block kernels with kernel(s) {self.metrics} and shrinkage {self.shrinkage}')
 
         # make the df wheren each block is 1 column
         X_df = self._prepare_dataframe(X)
@@ -415,35 +417,25 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
         return self.kmeans.centroids()     
 
     def fit(self, X, y=None):
-        print(f"Fitting data with shape {X.shape}, using {self.n_init} random initializations")
+        print(f"KMeans: Fitting data with shape {X.shape}, using {self.n_init} random initializations")
         self.kmeans.fit(X)
         self.labels_ = self.kmeans.labels_
         return self
 
     def predict(self, X):
-        print(f"Predicting data with shape {X.shape}")
+        print(f"KMeans: Predicting data with shape {X.shape}")
         return self.kmeans.predict(X)
 
     def fit_predict(self, X):
         return self.fit(X).labels_
 
-def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_riemann): 
+def riemannian_silhouette_score(matrices, labels, n_jobs = n_jobs, distance=distance_riemann): 
     """Calculates Silhouette Coefficient based on pairwise Affine-Invariant Riemannian Metric 
     on 10% random matrices (stratified sampling).""" 
     # We could also use Bures-Wasserstein distance (distance_wasserstein), which is a lot faster, 
     # but not what is used in the actual Lloyd's algorithm as implemented above. 
-
-    # (1) Extract matrices
-    block_matrices = pipeline.named_steps["block_kernels"].matrices_
-    labels = pipeline.named_steps["kmeans"].labels_
-
-    # (2) Stratified sampling
-    #random_idx = np.random.choice(range(block_matrices.shape[0]), block_matrices.shape[0]/10, replace=False)
-    #sampled_matrices = block_matrices[random_idx]
-    #sampled_labels = labels[random_idx]
-    #n_matrices = sampled_matrices.shape[0]
     
-    df = pd.DataFrame({'index': np.arange(len(block_matrices)), 'cluster': labels})
+    df = pd.DataFrame({'index': np.arange(len(matrices)), 'cluster': labels})
     # sample 10% from each cluster
     stratified_subset = (   
         df.groupby('cluster', group_keys=False)
@@ -451,16 +443,14 @@ def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_rie
         .reset_index(drop=True)
     )
     stratified_indices = stratified_subset['index'].values  # Remove cluster column
-    stratified_matrices = block_matrices[stratified_indices]
+    stratified_matrices = matrices[stratified_indices]
     stratified_labels = labels[stratified_indices]
     n_matrices = len(stratified_matrices)
 
-    print(f"Processing: stratified sample of {n_matrices} data points")
+    print(f"SilhouetteScore: Processing stratified sample of {n_matrices} data points")
     
     # (3) Parallel execution of distance calculation
     def compute_distance(i, j, matrices, distance):
-        if j == 0:
-            print(f"Processing i = {i} (outer loop)")
         return distance(matrices[i], matrices[j])
 
     pairwise_distances = Parallel(n_jobs=n_jobs)(
@@ -478,16 +468,14 @@ def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_rie
     score = silhouette_score(pairwise_distances_matrix, stratified_labels, metric='precomputed')
     return score
 
-def ch_score(pipeline):
+def ch_score(matrices, labels):
     # (1) Extract and transform matrices
     flattener = FlattenTransformer()
-    block_matrices = pipeline.named_steps["block_kernels"].matrices_
-    flattener.fit(block_matrices)
-    block_matrices = flattener.transform(block_matrices)
-    preds = pipeline.named_steps["kmeans"].labels_
+    flattener.fit(matrices)
+    matrices = flattener.transform(matrices)
     
     # (2) Calculate Calinski-Harabasz score
-    score = calinski_harabasz_score(block_matrices, preds)
+    score = calinski_harabasz_score(matrices, labels)
     return score
 
 def riemannian_variance(cluster, mean):
@@ -604,3 +592,40 @@ def log_euclidean_centering(spd_matrices):
     demeaned_matrices = [log_X - ref_log for log_X in log_matrices]
     spd_centered = [expm(ref_log + matrix) for matrix in demeaned_matrices]
     return spd_centered
+
+def project_to_common_space(matrices, target_dim):
+    """
+    Projects SPD matrices to a lower-dimensional common space using principal subspace projection.
+    
+    Parameters:
+        cov_matrices (list of np.array): List of SPD matrices of shape (n_matrices, d, d).
+        target_dim (int): Target dimension for projection.
+    
+    Returns:
+        np.array: Projected SPD matrices of shape (n_matrices, target_dim, target_dim).
+    """
+    d = matrices[0].shape[0]  # original dimension
+    n_matrices = len(matrices)
+    mean_cov = sum(matrices) / n_matrices
+
+    # transform into Euclidean space
+    mean_sqrt_inv = invsqrtm(mean_cov) # whitening transformation
+    log_matrices = [logm(mean_sqrt_inv @ C @ mean_sqrt_inv) for C in matrices] #log-map transformation
+    
+    # flatten SPD matrices for PCA
+    flat_matrices = [log_C[np.triu_indices(d)] for log_C in log_matrices]  # Use upper triangular values
+    flat_matrices = np.array(flat_matrices)
+    
+    # PCA for dimensionality reduction
+    pca = PCA(n_components=(target_dim * (target_dim + 1)) // 2)
+    reduced_matrices = pca.fit_transform(flat_matrices)
+    
+    # reconstruct SPD matrices in the lower-dimensional space
+    projected_matrices = []
+    for i in range(n_matrices):
+        log_proj = np.zeros((target_dim, target_dim))
+        log_proj[np.triu_indices(target_dim)] = reduced_matrices[i]
+        log_proj = log_proj + log_proj.T - np.diag(np.diag(log_proj))  # ensure symmetry
+        projected_matrices.append(expm(log_proj))  # map back to SPD space
+    
+    return np.array(projected_matrices)
