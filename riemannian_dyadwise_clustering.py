@@ -23,7 +23,7 @@ from riemannianKMeans import Demeaner, FlattenTransformer, ListTimeSeriesWindowT
 
 os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
 # ------------------------------------------------------------
-# define single analysis
+# Define single analysis. Do not change this section. 
 def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, window_length, step_length, shrinkage, metrics, n_clusters): 
     
     # ------------------------------------------------------------
@@ -43,7 +43,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     
     # ------------------------------------------------------------
     ### Group by number of channels and segment into windows
-    
+        #TODO: Make grouping optional (use only data with all channels)
     grouping_indices = [[np.where(np.array(channels_tmp) == channel_no)[0]] for channel_no in set(channels_tmp)]
     windowsTransformer = ListTimeSeriesWindowTransformer(
                 window_size = upsampling_freq*window_length,
@@ -69,6 +69,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
      
     # ------------------------------------------------------------
     ### Get kernel matrices with HybridBlocks
+    #TODO: adapt for varying block sizes, find out why currently there is no issue
     block_kernels = HybridBlocks(block_size=block_size,
                                  shrinkage=shrinkage,
                                  metrics=metrics)
@@ -184,7 +185,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     return matrices, classes, activities_common, sessions_common, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, len(sessions_tmp)
 
 # ------------------------------------------------------------
-### set arguments
+### Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
 type_of_data = "two_blocks"
@@ -200,11 +201,11 @@ which_id = 2014 # set which_id = 'all' for all dyads/participants
 which_session = 5 # set which_session = 'all' for all sessions
 
 # should the matrices be demeaned? 
-demean = True
+demean = False
 # if so, within-id or within-session?
-demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
+demeaner_var = 'none' # 'none', 'id-wise', 'session-wise'
 # if so, which method?
-demeaner_method = 'airm' # 'log-euclidean', 'tangent', 'projection', or 'airm'
+demeaner_method = 'tangent' # 'log-euclidean', 'tangent', 'projection', or 'airm'
 # 'projection' takes the longest, but seems to give the best result
 
 # do we want to do a single run or a grid search? (0 = single run, 1 = grid search)
@@ -212,17 +213,10 @@ grid_search = 0
 ## in case of 0, define hyperparameters below
 ## in case of 1, define parameter space below
 
-# are we interested in the plot? (0/1, overridden in case of grid search)
+# are we interested in the plot? (0/1, overridden in case of grid search: no plot)
 plot = 1
 
-# define global settings
-n_jobs = -1 # use all available cores
-random_state = 42 # random state for reproducibility
-n_init = 10 # number of initializations for kMeans
-max_iter = 5 # maximum number of iterations for kMeans
-
 # hyperparameters (overridden in case of grid search)
-cv_splits = 5 # number of cross-validation folds
 shrinkage = 0.01 # shrinkage value
 metrics = 'rbf' # kernel function
 n_clusters = 3 # number of clusters for k-means
@@ -233,13 +227,20 @@ params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
 params_n_clusters = range(3, 8)
 
 # information on data
+#TODO: adapt for varying block sizes!
 block_size = 4 # number of channels for HbO and HbR
 upsampling_freq = 5 # frequency to which the data have been upsampled
 window_length = 15 # length of windows in s
 step_length = 1 # steps 
 
+# define global settings
+n_jobs = -1 # use all available cores
+random_state = 42 # random state for reproducibility
+n_init = 10 # number of initializations for kMeans
+max_iter = 5 # maximum number of iterations for kMeans
+
 # ------------------------------------------------------------
-### Load data
+### Load data. Do not change this section. 
 
 # Load the dataset
 npz_data = np.load(f"./data/ts_{type_of_data}.npz")
@@ -273,7 +274,7 @@ y = y[y != 'diverse']
 
 
 # ------------------------------------------------------------
-### Run pipeline 
+### Run pipeline. Do not change this section. 
 
 if grid_search == 0:
     scores = []
@@ -320,7 +321,7 @@ if grid_search == 0:
         
 
 # ------------------------------------------------------------
-### Run grid search
+### Run grid search. Do not change this section. 
 
 if grid_search == 1:
     # Compute grid search parameters from inputs
@@ -397,8 +398,11 @@ if grid_search == 1:
                                        'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio'
                                        'RandScoreActivities', 'RandScoreSessions', 'RandScoreIds', 'nSessions'])
 
+#TODO: Find best clustering in scores
+
 # ------------------------------------------------------------
-### save results
+### Save results. Do not change this section. 
+#TODO: save clustering results, not only grid search results
 print("saving results")
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 scores.to_csv(f"results/results_{type_of_data}_{timestamp}.csv", index=False)
