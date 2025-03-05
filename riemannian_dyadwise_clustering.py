@@ -29,35 +29,38 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     # ------------------------------------------------------------
     ### Get data
     if clustering == 'full':
-        X_tmp, y_tmp, sessions_tmp, ids_tmp, channels_tmp = X, y, sessions, ids, n_channels
+        X_tmp, y_tmp, sessions_tmp, ids_tmp, blocks_tmp, channels_tmp = X, y, sessions, ids, blocks, n_channels
         print(f"Data loaded: {len(X_tmp)} trials")
     elif clustering == 'id-wise':
         indices = np.where(ids == id)[0]
-        X_tmp, y_tmp, sessions_tmp, ids_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [n_channels[i] for i in indices]
+        X_tmp, y_tmp, sessions_tmp, ids_tmp, blocks_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [blocks[i] for i in indices], [n_channels[i] for i in indices]
         print(f"Data loaded for id {id}: {len(X_tmp)} trials")
     elif clustering == 'session-wise':
         indices = np.where((ids == id) & (sessions == session))[0]
-        X_tmp, y_tmp, sessions_tmp, ids_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [n_channels[i] for i in indices]
+        X_tmp, y_tmp, sessions_tmp, ids_tmp, blocks_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [blocks[i] for i in indices], [n_channels[i] for i in indices]
         assert len(indices) != 0, 'ID-session combination does not exist in data set.'
         print(f"Data loaded for id {id} and session {session}: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
     
     # ------------------------------------------------------------
     ### Group by number of channels and segment into windows
-        #TODO: Make grouping optional (use only data with all channels)
-    grouping_indices = [[np.where(np.array(channels_tmp) == channel_no)[0]] for channel_no in set(channels_tmp)]
+    if use_missing_channels: 
+        grouping_indices = [[np.where(np.array(channels_tmp) == channel_no)[0]] for channel_no in set(channels_tmp)]
+    else:
+        grouping_indices = [np.where(np.array(channels_tmp) == exp_n_channels)]
     windowsTransformer = ListTimeSeriesWindowTransformer(
-                window_size = upsampling_freq*window_length,
-                step_size = upsampling_freq*step_length
-            )
+            window_size = upsampling_freq*window_length,
+            step_size = upsampling_freq*step_length
+        )
     
     # Group variables
     X_grouped = [[X_tmp[i] for i in ind[0]] for ind in grouping_indices]
     activities_grouped = [np.array([y_tmp[i] for i in ind[0]]) for ind in grouping_indices]
     sessions_grouped = [np.array([sessions_tmp[i] for i in ind[0]]) for ind in grouping_indices]
     ids_grouped = [np.array([ids_tmp[i] for i in ind[0]]) for ind in grouping_indices]
-    
-    # Fit transformer
-    X_seg, activities_seg, sessions_seg, ids_seg = [], [], [], []
+    blocks_grouped = [np.array([blocks_tmp[i] for i in ind[0]]) for ind in grouping_indices]
+    channels_grouped = [np.array([channels_tmp[i] for i in ind[0]]) for ind in grouping_indices]
+
+    X_seg, activities_seg, sessions_seg, ids_seg, blocks_seg, channels_seg = [], [], [], [], [], []
     
     # Transform into windows
     for in_channelgroup in range(0, len(X_grouped)):
@@ -65,15 +68,17 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
         activities_seg.append(windowsTransformer.transform(activities_grouped[in_channelgroup], is_labels=True))
         sessions_seg.append(windowsTransformer.transform(sessions_grouped[in_channelgroup], is_labels=True))
         ids_seg.append(windowsTransformer.transform(ids_grouped[in_channelgroup], is_labels=True))
-    
+        blocks_seg.append(windowsTransformer.transform(blocks_grouped[in_channelgroup], is_labels=True))
+        channels_seg.append(windowsTransformer.transform(channels_grouped[in_channelgroup], is_labels=True))
      
     # ------------------------------------------------------------
     ### Get kernel matrices with HybridBlocks
-    #TODO: adapt for varying block sizes, find out why currently there is no issue
-    block_kernels = HybridBlocks(block_size=block_size,
+    matrices = []
+    for in_channelgroup in range(len(X_seg)):
+        block_kernels = HybridBlocks(block_size=list(blocks_seg[in_channelgroup][0]),
                                  shrinkage=shrinkage,
                                  metrics=metrics)
-    matrices = [block_kernels.fit_transform(X_seg[in_channelgroup]) for in_channelgroup in range(0, len(X_seg))]
+        matrices.append(block_kernels.fit_transform(X_seg[in_channelgroup]))
 
     # ------------------------------------------------------------
     ### Project matrices into common space
@@ -86,6 +91,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     activities_common = np.concatenate(activities_seg)
     sessions_common = np.concatenate(sessions_seg)
     ids_common = np.concatenate(ids_seg)
+    channels_common = np.concatenate(channels_seg)
 
     # ------------------------------------------------------------
     ### Demean matrices
@@ -107,11 +113,13 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
                 print("Warning: will not demean because demeaning mode is unclear.")
         elif clustering == 'session-wise': 
             print("Warning: will not demean because clustering is session-wise.")
-   
-    demeaner = Demeaner(groups=groups,
+        demeaner = Demeaner(groups=groups,
                         activate=demean,
                         method=demeaner_method)
-    matrices = demeaner.fit_transform(X_common)
+        matrices = demeaner.fit_transform(X_common)
+    
+    else:
+        matrices = X_common
 
     # ------------------------------------------------------------
     ### KMeans
@@ -140,7 +148,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     rand_score_id = adjusted_rand_score(classes, ids_common) if clustering == 'all' else np.nan
     rand_score_ses = adjusted_rand_score(classes, sessions_common) if clustering != 'session-wise' else np.nan
     rand_score_act = adjusted_rand_score(classes, activities_common)
-    
+    rand_score_chs = adjusted_rand_score(classes, channels_common)
 
     # ------------------------------------------------------------
     ### PCA 
@@ -161,6 +169,17 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
         plt.legend()
         plt.show()
         
+        # With n_channels as labels
+        if use_missing_channels:
+            plt.figure(figsize=(6, 5))
+            for label in np.unique(channels_common): 
+                plt.scatter(X_pca[channels_common == label, 0], X_pca[channels_common == label, 1], label=f"n_channels: {label}", alpha=0.8)
+            plt.xlabel("PC1")
+            plt.xlabel("PC2")
+            plt.title(f"Tangent Space PCA projection for ID {id}, channel numbers")
+            plt.legend()
+            plt.show()
+
         # With session as labels
         if clustering != 'session-wise':
             plt.figure(figsize=(6, 5))
@@ -184,6 +203,30 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     
     return matrices, classes, activities_common, sessions_common, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, len(sessions_tmp)
 
+def get_counts(strings):
+    a = b = c = d = 0
+    state_i = 'hbr'
+    state_j = 1
+    
+    for s in strings:
+        if s.endswith('hbr'):
+            if state_i == 'hbr' and state_j == 1:  
+                a += 1
+            elif state_i == 'hbr' and state_j == 2:  
+                c += 1
+            elif state_i == 'hbo' and state_j == 1:
+                c += 1
+                state_j = 2
+            state_i = 'hbr'
+        elif s.endswith('hbo'):
+            if state_j == 1:
+                b += 1
+            elif state_j == 2: 
+                d += 1
+            state_i = 'hbo'
+
+    return a, b, c, d
+
 # ------------------------------------------------------------
 ### Set arguments. Change only variables in this section of the script. 
 
@@ -191,6 +234,10 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
 type_of_data = "two_blocks"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
+
+# do we want to use data with missing channels?
+use_missing_channels = True
+# if so, data from all sessions are projected into a common space
 
 # how do we want to cluster?
 # Choose from 'full', 'id-wise', 'session-wise'
@@ -256,21 +303,32 @@ conditions = [
     (doc['2'] == 3)]
 choices = ['alone', 'collab', 'diverse']
 y = np.select(conditions, choices, default='unknown')
-npz_rois = np.load(f"./data/rois_{type_of_data}.npz")
-rois = []
+npz_channels = np.load(f"./data/channels_{type_of_data}.npz")
+channels = []
 for array in list(npz_rois.files):
-    rois.append(npz_rois[array])
-n_channels = np.array([len(rois[i]) for i in range(0, len(rois))])
+    channels.append(npz_channels[array])
 
 # make variable for chosen ids
 chosen_ids = np.unique(ids) if which_id == 'all' else [which_id]
 
 # choose only drawing alone and collaborative drawing
 X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
-ids = ids[y != 'diverse']
-sessions = sessions[y != 'diverse']
-n_channels = n_channels[y != 'diverse']
-y = y[y != 'diverse']
+drawing_indices = np.where(y != 'diverse')[0]
+y = y[drawing_indices]
+ids = ids[drawing_indices]
+sessions = sessions[drawing_indices]
+channels = [channels[i] for i in drawing_indices]
+blocks = []
+for i in range(len(channels)):
+    blocks.append(get_counts(channels[i]))
+blocks = np.array(blocks)
+n_channels = np.array([len(channels[i]) for i in range(0, len(channels))])
+
+# channels and block size
+if type_of_data == "one_brain":
+    exp_n_channels = 8
+else: 
+    exp_n_channels = 16
 
 
 # ------------------------------------------------------------

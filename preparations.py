@@ -33,7 +33,7 @@ current_freq = 5
 verbosity = 40 #ERRORS and CRITICAL, but not WARNING, INFO, DEBUG
 
 all_dict = {}
-roi_dict = {}
+roi_dict, channel_dict = {}, {}
 error_log = []
 for file in os.listdir(inpath):
     if file.endswith(".fif"):
@@ -62,7 +62,6 @@ for file in os.listdir(inpath):
         #base_chs = pd.Series(chs).str.replace(r' (hbo|hbr)$', '', regex=True)
         #channel_to_ROI = dict(zip(best_chs['channel'], best_chs['ROI']))
         #ROI_array = pd.Series(base_chs).map(channel_to_ROI)
-        ROI_list = list(set(best_chs.ROI))
 
         # check whether there are enough onsets recorded
         if len(data.annotations) < 4:
@@ -96,7 +95,7 @@ for file in os.listdir(inpath):
         # write into dictionary
         keyname = file[:-8]
         all_dict[keyname] = epoch_list
-        roi_dict[keyname] = ROI_list + ROI_list
+        channel_dict[keyname] = chs
 
 # align onsets
 # To this end, we move outside the snirf structure and work only on the timeseries.
@@ -209,12 +208,12 @@ for key in key_list:
             'interpolation': target_list,
             'duration': duration_list,
             'true_duration': true_duration_list,
-            'rois': roi_dict[key]}
+            'channels': channel_dict[key]}
         data_dict[partner_key] = {
             'interpolation': partner_list,
             'duration': duration_list,
             'true_duration_list': true_duration_list,
-            'rois': roi_dict[partner_key]}
+            'channels': channel_dict[partner_key]}
 
     else: 
         target_list = []
@@ -254,7 +253,7 @@ for key in key_list:
             'interpolation': target_list,
             'duration': duration_list,
             'true_duration': true_duration_list,
-            'rois': roi_dict[key]}
+            'channels': channel_dict[key]}
         
         error_log.append((f'sub-{targetID}_session-{session_n}', 'partner data missing'))
 
@@ -274,8 +273,8 @@ ts_one_brain, ts_two_blocks, ts_four_blocks = [], [], []
 ts_one_brain_session, ts_two_blocks_session, ts_four_blocks_session = [], [], []
 doc_one_brain, doc_two_blocks, doc_four_blocks = [], [], []
 doc_one_brain_session, doc_two_blocks_session, doc_four_blocks_session = [], [], []
-rois_one_brain, rois_two_blocks, rois_four_blocks = [], [], []
-rois_one_brain_session, rois_two_blocks_session, rois_four_blocks_session = [], [], []
+channels_one_brain, channels_two_blocks, channels_four_blocks = [], [], []
+channels_one_brain_session, channels_two_blocks_session, channels_four_blocks_session = [], [], []
 key_list = set(data_dict.keys())
 for i, row in dyads.iterrows():
     for session in range(6):
@@ -283,7 +282,7 @@ for i, row in dyads.iterrows():
         
         if target_key in key_list: 
             target_list = data_dict[target_key]['interpolation']
-            target_rois = data_dict[target_key]['rois']
+            target_channels = data_dict[target_key]['channels']
             partner_key = f"sub-{row['pID2']}_session-{session + 1}"
             ts_target_temp, ts_partner_temp, ts_two_temp, ts_four_temp = [], [], [], []
             for activity in range(4):
@@ -293,34 +292,34 @@ for i, row in dyads.iterrows():
                 # 1a target, one brain data (two blocks: HbO + HbR), channel-wise z-scored
                 ts_one_brain.append(target_ts)
                 doc_one_brain.extend([[row['pID1'], session, activity]])
-                rois_one_brain.append(target_rois)
+                channels_one_brain.append(target_channels)
                 ts_target_temp.append(target_ts)
             
                 if partner_key in key_list: 
                     
                     partner_list = data_dict[partner_key]['interpolation']
-                    partner_rois = data_dict[partner_key]['rois']
+                    partner_channels = data_dict[partner_key]['channels']
                     partner_ts = partner_list[activity]
                     # channel-wise z-scoring
                     partner_ts = sp.stats.zscore(partner_ts, axis=1, ddof=1)
                     # 1a partner, one brain data (two blocks: HbO + HbR), channel-wise z-scored
                     ts_one_brain.append(partner_ts)
                     doc_one_brain.extend([[row['pID2'], session, activity]])
-                    rois_one_brain.append(partner_rois)
+                    channels_one_brain.append(partner_channels)
                     ts_partner_temp.append(partner_ts)
                     
                     # 2a, two blocks: target + partner, channel-wise z-scored
                     ts_two = np.concatenate((target_ts, partner_ts), axis = 0)         
                     ts_two_blocks.append(ts_two)
                     doc_two_blocks.extend([[row['dyadID'], session, activity]])
-                    rois_two_blocks.append(target_rois + partner_rois)
+                    channels_two_blocks.append(target_channels + partner_channels)
                     ts_two_temp.append(ts_two)
                     
                     # 3a, four blocks: target HbO, partner HbO, target HbR, partner HbR
-                    ts_four = np.concatenate((target_ts[:int(len(target_rois)/2)], partner_ts[:int(len(partner_rois)/2)], target_ts[int(len(target_rois)/2):len(target_rois)], partner_ts[int(len(partner_rois)/2):len(partner_rois)]), axis=0)
+                    ts_four = np.concatenate((target_ts[:int(len(target_channels)/2)], partner_ts[:int(len(partner_channels)/2)], target_ts[int(len(target_channels)/2):len(target_channels)], partner_ts[int(len(partner_channels)/2):len(partner_channels)]), axis=0)
                     ts_four_blocks.append(ts_four)
                     doc_four_blocks.extend([[row['dyadID'], session, activity]])
-                    rois_four_blocks.append(target_rois + partner_rois)
+                    channels_four_blocks.append(target_channels + partner_channels)
                     ts_four_temp.append(ts_four)
             # 1b target, one brain data as above, channel- and session-wise z-scored
             ## session-wise z-scoring
@@ -332,7 +331,7 @@ for i, row in dyads.iterrows():
             for activity in range(4):
                 ts_one_brain_session.append(ts_target_split[activity])
                 doc_one_brain_session.extend([[row['pID1'], session, activity]])
-                rois_one_brain_session.append(target_rois)
+                channels_one_brain_session.append(target_channels)
             if partner_key in key_list: 
                 ## session-wise z-scoring
                 n_samples = [ts.shape[1] for ts in ts_partner_temp]
@@ -351,15 +350,15 @@ for i, row in dyads.iterrows():
                     # 1b partner, one brain data as above, channel- and session-wise z-scored
                     ts_one_brain_session.append(ts_partner_split[activity])
                     doc_one_brain_session.extend([[row['pID2'], session, activity]])
-                    rois_one_brain_session.append(partner_rois)
+                    channels_one_brain_session.append(partner_channels)
                     # 2b, two blocks as above, channel- and session-wise z-scored
                     ts_two_blocks_session.append(ts_two_split[activity])
                     doc_two_blocks_session.extend([[row['dyadID'], session, activity]])
-                    rois_two_blocks_session.append(target_rois + partner_rois)
+                    channels_two_blocks_session.append(target_channels + partner_channels)
                     # 3b, four blocks as above, channel- and session-wise z-scored
                     ts_four_blocks_session.append(ts_four_split[activity])
                     doc_four_blocks_session.extend([[row['dyadID'], session, activity]])
-                    rois_four_blocks_session.append(target_rois + partner_rois)
+                    channels_four_blocks_session.append(target_channels + partner_channels)
 
 doc_one_brain = pd.DataFrame(doc_one_brain)
 doc_two_blocks = pd.DataFrame(doc_two_blocks)
@@ -371,19 +370,19 @@ doc_four_blocks_session = pd.DataFrame(doc_four_blocks_session)
 # save
 doc_one_brain.to_csv(str(path + 'doc_one_brain.csv'))
 np.savez(str(path + 'ts_one_brain'), *ts_one_brain)
-np.savez(str(path + 'rois_one_brain'), *rois_one_brain)
+np.savez(str(path + 'channels_one_brain'), *channels_one_brain)
 doc_two_blocks.to_csv(str(path + 'doc_two_blocks.csv'))
 np.savez(str(path + 'ts_two_blocks'), *ts_two_blocks)
-np.savez(str(path + 'rois_two_blocks'), *rois_two_blocks)
+np.savez(str(path + 'channels_two_blocks'), *channels_two_blocks)
 doc_four_blocks.to_csv(str(path + 'doc_four_blocks.csv'))
 np.savez(str(path + 'ts_four_blocks'), *ts_four_blocks)
-np.savez(str(path + 'rois_four_blocks'), *rois_four_blocks)
+np.savez(str(path + 'channels_four_blocks'), *channels_four_blocks)
 doc_one_brain_session.to_csv(str(path + 'doc_one_brain_session.csv'))
 np.savez(str(path + 'ts_one_brain_session'), *ts_one_brain_session)
-np.savez(str(path + 'rois_one_brain_session'), *rois_one_brain_session)
+np.savez(str(path + 'channels_one_brain_session'), *channels_one_brain_session)
 doc_two_blocks_session.to_csv(str(path + 'doc_two_blocks_session.csv'))
 np.savez(str(path + 'ts_two_blocks_session'), *ts_two_blocks_session)
-np.savez(str(path + 'rois_two_blocks_session'), *rois_two_blocks_session)
+np.savez(str(path + 'channels_two_blocks_session'), *channels_two_blocks_session)
 doc_four_blocks_session.to_csv(str(path + 'doc_four_blocks_session.csv'))
 np.savez(str(path + 'ts_four_blocks_session'), *ts_four_blocks_session)
-np.savez(str(path + 'rois_four_blocks_session'), *rois_four_blocks_session)
+np.savez(str(path + 'channels_four_blocks_session'), *channels_four_blocks_session)
