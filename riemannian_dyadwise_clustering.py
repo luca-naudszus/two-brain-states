@@ -3,24 +3,100 @@
 
 
 # ------------------------------------------------------------
-# import packages and custom functions
+# Import packages and custom functions
 
 from datetime import datetime
-from itertools import product
 import json
+import os
+from pathlib import Path
+#---
+from itertools import product
 import matplotlib.pyplot as plt
 import numpy as np
-import os
 import pandas as pd
+#---
 from pyriemann.utils.mean import mean_riemann
 from pyriemann.utils.tangentspace import tangent_space
 from sklearn.decomposition import PCA
-from sklearn.metrics import adjusted_rand_score, davies_bouldin_score
-from riemannianKMeans import Demeaner, ListTimeSeriesWindowTransformer, HybridBlocks, RiemannianKMeans, ch_score, geodesic_distance_ratio, project_to_common_space, riemannian_davies_bouldin, riemannian_silhouette_score, riemannian_variance
+from sklearn.metrics import adjusted_rand_score
+#---
+from riemannianKMeans import (
+    Demeaner, 
+    ListTimeSeriesWindowTransformer, 
+    HybridBlocks, 
+    RiemannianKMeans, 
+    ch_score, 
+    geodesic_distance_ratio, 
+    project_to_common_space, 
+    riemannian_davies_bouldin, 
+    riemannian_silhouette_score, 
+    riemannian_variance
+)
 
 os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
+
 # ------------------------------------------------------------
-# Define single analysis. Do not change this section. 
+### Set arguments. Change only variables in this section of the script. 
+
+# which type of data are we interested in?
+type_of_data = "one_brain"
+# one_brain, two_blocks, four_blocks: channel-wise z-scoring
+# one_brain_session etc.: channel- and session-wise z-scoring
+exp_block_size = 4 
+which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
+
+# do we want to use data with missing channels?
+use_missing_channels = False
+# if so, data from all sessions are projected into a common space
+
+# how do we want to cluster?
+# Choose from 'full', 'id-wise', 'session-wise'
+clustering = 'id-wise' 
+# Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
+which_id = 105 # set which_id = 'all' for all dyads/participants
+# Which session do we want to look at? (only for session-wise clustering)
+which_session = 'all' # set which_session = 'all' for all sessions
+
+# should the matrices be demeaned? 
+demean = False
+# if so, within-id or within-session?
+demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
+# if so, which method?
+demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'airm'
+# 'projection' takes the longest, but seems to give the best result
+
+# do we want to do a single run or a grid search? (False = single run, True = grid search)
+grid_search = False
+## in case of False, define hyperparameters below
+## in case of True, define parameter space below
+
+# are we interested in the plot? (True/False, overridden in case of grid search: no plot)
+plot = False
+
+# hyperparameters (overridden in case of grid search)
+shrinkage = 0.01 # shrinkage value
+metrics = 'cov' # kernel function
+n_clusters = 5 # number of clusters for k-means
+
+# parameter space for grid search
+params_shrinkage = [0, 0.01, 0.1]
+params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
+params_n_clusters = range(3, 10)
+
+# information on data
+upsampling_freq = 5 # frequency to which the data have been upsampled
+window_length = 30 # length of windows in s
+step_length = 1 # steps 
+
+# define global settings
+n_jobs = -1 # use all available cores
+random_state = 42 # random state for reproducibility
+n_init = 10 # number of initializations for kMeans
+max_iter = 5 # maximum number of iterations for kMeans
+
+# ------------------------------------------------------------
+# Define custom functions. Do not change this section. 
+
 def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, window_length, step_length, shrinkage, metrics, n_clusters): 
     
     # ------------------------------------------------------------
@@ -238,66 +314,7 @@ def get_counts(strings):
         return a, b
     else: 
         return a, b, c, d
-
-# ------------------------------------------------------------
-### Set arguments. Change only variables in this section of the script. 
-
-# which type of data are we interested in?
-type_of_data = "one_brain"
-# one_brain, two_blocks, four_blocks: channel-wise z-scoring
-# one_brain_session etc.: channel- and session-wise z-scoring
-exp_block_size = 4 
-which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
-
-# do we want to use data with missing channels?
-use_missing_channels = False
-# if so, data from all sessions are projected into a common space
-
-# how do we want to cluster?
-# Choose from 'full', 'id-wise', 'session-wise'
-clustering = 'id-wise' 
-# Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
-which_id = 105 # set which_id = 'all' for all dyads/participants
-# Which session do we want to look at? (only for session-wise clustering)
-which_session = 'all' # set which_session = 'all' for all sessions
-
-# should the matrices be demeaned? 
-demean = False
-# if so, within-id or within-session?
-demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
-# if so, which method?
-demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'airm'
-# 'projection' takes the longest, but seems to give the best result
-
-# do we want to do a single run or a grid search? (False = single run, True = grid search)
-grid_search = False
-## in case of False, define hyperparameters below
-## in case of True, define parameter space below
-
-# are we interested in the plot? (True/False, overridden in case of grid search: no plot)
-plot = False
-
-# hyperparameters (overridden in case of grid search)
-shrinkage = 0.01 # shrinkage value
-metrics = 'cov' # kernel function
-n_clusters = 5 # number of clusters for k-means
-
-# parameter space for grid search
-params_shrinkage = [0, 0.01, 0.1]
-params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
-params_n_clusters = range(3, 10)
-
-# information on data
-upsampling_freq = 5 # frequency to which the data have been upsampled
-window_length = 30 # length of windows in s
-step_length = 1 # steps 
-
-# define global settings
-n_jobs = -1 # use all available cores
-random_state = 42 # random state for reproducibility
-n_init = 10 # number of initializations for kMeans
-max_iter = 5 # maximum number of iterations for kMeans
-
+    
 # ------------------------------------------------------------
 ### Load data. Do not change this section. 
 
@@ -525,11 +542,11 @@ if grid_search:
 ### Save results. Do not change this section. 
 print("saving results")
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-scores.to_csv(f"results/parameter_space_scores_{type_of_data}_{timestamp}.csv", index=False)
+scores.to_csv(Path(outpath, f"parameter_space_scores_{type_of_data}_{timestamp}.csv"), index=False)
 if not grid_search: 
-    np.save(f"results/matrices_{type_of_data}_{timestamp}.npy", matrices)
-    np.save(f"results/cluster_means_{type_of_data}_{timestamp}.npy", cluster_means)
-    np.save(f"results/classes_{type_of_data}_{timestamp}.npy", classes)
+    np.save(Path(outpath, f"matrices_{type_of_data}_{timestamp}.npy"), matrices)
+    np.save(Path(outpath, f"cluster_means_{type_of_data}_{timestamp}.npy"), cluster_means)
+    np.save(Path(outpath, f"classes_{type_of_data}_{timestamp}.npy"), classes)
 json_object = json.dumps(dict, indent=4)
-with open(f"results/pipeline_description_{timestamp}.json", "w") as outfile: 
+with open(Path(outpath, f"pipeline_description_{timestamp}.json"), "w") as outfile: 
     outfile.write(json_object)

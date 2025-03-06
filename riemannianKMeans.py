@@ -1,38 +1,38 @@
+# ------------------------------------------------------------
+# Import packages
+
+
+from joblib import Parallel, delayed
+#---
 import numpy as np
 import pandas as pd
-from joblib import Parallel, delayed
-
-from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
-
-from sklearn.compose import ColumnTransformer
-from sklearn.utils.validation import check_is_fitted
-from sklearn.pipeline import Pipeline, make_pipeline
-from collections import defaultdict
-from sklearn.metrics import silhouette_score, calinski_harabasz_score
-
-import pyriemann
-from pyriemann.classification import SVC
+from scipy.linalg import block_diag
+#---
+from pyriemann.clustering import Kmeans
 from pyriemann.estimation import (
-    BlockCovariances, 
     Covariances,
     Kernels,
     Shrinkage,
 )
-from pyriemann.utils.distance import distance_riemann, distance_wasserstein
-ker_est_functions = [
-    "linear", "poly", "polynomial", "rbf", "laplacian", "cosine"
-]
 from pyriemann.utils.base import expm, invsqrtm, logm, sqrtm
 from pyriemann.utils.covariance import cov_est_functions
+from pyriemann.utils.distance import distance_riemann, distance_wasserstein
 from pyriemann.utils.mean import mean_riemann
-from scipy.linalg import block_diag
+from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
+from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score, calinski_harabasz_score
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.utils.validation import check_is_fitted
 
 # ------------------------------------------------------------
 # define constant values
 n_jobs = -1 # use all available cores
 max_iter = 5 # maximum number of iterations
 random_state = 42
+ker_est_functions = [
+    "linear", "poly", "polynomial", "rbf", "laplacian", "cosine"
+]
 
 # ------------------------------------------------------------
 # define custom classes and functions
@@ -407,7 +407,7 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
         self.max_iter = max_iter
         self.n_init = n_init
         self.metric = "riemann"
-        self.kmeans = pyriemann.clustering.Kmeans(n_clusters=n_clusters, 
+        self.kmeans = Kmeans(n_clusters=n_clusters, 
             n_jobs = n_jobs, 
             max_iter = max_iter,
             n_init = n_init,
