@@ -33,10 +33,13 @@ from riemannianKMeans import (
     riemannian_variance
 )
 
+# ------------------------------------------------------------
+# Set path
 os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
+outpath = 'results'
 
 # ------------------------------------------------------------
-### Set arguments. Change only variables in this section of the script. 
+# Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
 type_of_data = "one_brain"
