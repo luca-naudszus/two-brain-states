@@ -79,7 +79,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
             block_size = [actual_block_sizes[0+i*2] + actual_block_sizes[1+i*2] for i in range(exp_n_blocks)]
         else: 
             block_size = list(actual_block_sizes)
-        assert len(actual_block_sizes) == exp_n_blocks, "Too few blocks in data"
+        assert len(actual_block_sizes) == exp_n_blocks, "Block number in data does not match expected block number."
         block_kernels = HybridBlocks(block_size=block_size,
                                  shrinkage=shrinkage,
                                  metrics=metrics)
@@ -218,29 +218,32 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
 def get_counts(strings):
     a = b = c = d = 0
     participants = ['target', 'partner'] 
-    chromophore = ['hbo', 'hbr']
+    chromophore = ['hbr', 'hbo']
     level1 = chromophore if type_of_data in {"four_blocks", "four_blocks_session"} else participants
     level2 = participants if type_of_data in {"four_blocks", "four_blocks_session"} else chromophore
 
     for s in strings:
-        if s.find(level1[0]) != -1: 
+        if s.find(level1[0]) != -1 or type_of_data in {"one_brain", "one_brain_session"}: 
             if s.find(level2[0]) != -1:
                 a += 1
             elif s.find(level2[1]) != -1:
                 b += 1
-        elif s.startswith(level1[1]) != -1:
+        elif s.find(level1[1]) != -1:
             if s.find(level2[0]) != -1:
                 c += 1
             elif s.find(level2[1]) != -1:
                 d += 1
 
-    return a, b, c, d
+    if type_of_data in {"one_brain", "one_brain_session"}:
+        return a, b
+    else: 
+        return a, b, c, d
 
 # ------------------------------------------------------------
 ### Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "one-brain"
+type_of_data = "one_brain"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 4 
@@ -252,9 +255,9 @@ use_missing_channels = False
 
 # how do we want to cluster?
 # Choose from 'full', 'id-wise', 'session-wise'
-clustering = 'full' 
+clustering = 'id-wise' 
 # Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
-which_id = 'all' # set which_id = 'all' for all dyads/participants
+which_id = 105 # set which_id = 'all' for all dyads/participants
 # Which session do we want to look at? (only for session-wise clustering)
 which_session = 'all' # set which_session = 'all' for all sessions
 
@@ -267,7 +270,7 @@ demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'a
 # 'projection' takes the longest, but seems to give the best result
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
-grid_search = True
+grid_search = False
 ## in case of False, define hyperparameters below
 ## in case of True, define parameter space below
 
@@ -358,7 +361,7 @@ if grid_search:
         "h_freq": freq_bands[which_freq_bands][1],
         "use_missing_channels": use_missing_channels,
         "clustering": clustering,
-        "which_id": ids,
+        "which_id": which_id,
         "which_session": which_session,
         "demean": demean,
         "demeaner_method": demeaner_method,
@@ -378,7 +381,7 @@ else:
         "h_freq": freq_bands[which_freq_bands][1],
         "use_missing_channels": use_missing_channels,
         "clustering": clustering,
-        "which_id": ids,
+        "which_id": which_id, 
         "which_session": which_session,
         "demean": demean,
         "demeaner_method": demeaner_method,

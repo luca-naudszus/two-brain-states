@@ -59,7 +59,7 @@ def interpolate_timeseries(source_ts, target_length):
 
 def compute_true_duration(dyadID, session_n, in_epoch, cutpoints, upsampling_freq):
     ### Get true start and end
-    filtered_cutpoints = cutpoints[(cutpoints.Pair == dyadID) & (cutpoints.Session == session_n)]
+    filtered_cutpoints = cutpoints[(cutpoints.Pair.values == dyadID) & (cutpoints.Session.values == session_n)]
     current_start, next_start = filtered_cutpoints.Start[filtered_cutpoints.Task == in_epoch + 1], filtered_cutpoints.Start[filtered_cutpoints.Task == in_epoch + 2]
                 
     ### If this is known, find out task duration. 
@@ -161,7 +161,7 @@ for file in os.listdir(inpath):
 # ------------------------------------------------------------
 # Align onsets
 
-### To this end, we move outside the snirf structure and work only on the timeseries.
+### To this end, we move outside the fif structure and work only on the timeseries.
 key_list = list(all_dict.keys())
 data_dict, original_lengths, durations = {}, [], []
 for key in key_list:
@@ -269,14 +269,14 @@ for key in key_list:
         true_duration_list = []
         
         for in_epoch in range(0, len(target)):
-            target_ts = target[in_epoch].get_data(copy = False, verbose=verbosity)[0]
+            target_interp = target[in_epoch].get_data(copy = False, verbose=verbosity)[0]
             duration_list.append(np.shape(target_interp)[1] / upsampling_freq)
             
             ### We only have information on true duration for first three activities: 
             if in_epoch != len(target)-1: 
                 true_duration, task_samples = compute_true_duration(dyadID, session_n, in_epoch, cutpoints, upsampling_freq)
                 ### Dismiss the recording after the end of the activity.
-                target_interp = target_interp[:,task_samples]
+                target_interp = target_interp[:,:task_samples]
             else:
                 true_duration = np.nan
 
@@ -320,11 +320,10 @@ for i, row in dyads.iterrows():
 
     for session in range(6):
         target_key = f"sub-{row['pID1']}_session-{session + 1}"
-        
         if target_key in key_list: 
             ### 
             target_list = data_dict[target_key]['interpolation']
-            target_channels = ['target' + channel for channel in data_dict[target_key]['channels']]
+            target_channels = ['target ' + channel for channel in data_dict[target_key]['channels']]
             partner_key = f"sub-{row['pID2']}_session-{session + 1}"
             ts_target_temp, ts_partner_temp, ts_two_temp, ts_four_temp = [], [], [], []
             for activity in range(4):
@@ -334,7 +333,7 @@ for i, row in dyads.iterrows():
                 doc_one_brain.extend([[row['pID1'], session, activity]])
                 channels_one_brain.append(target_channels)
                 ts_target_temp.append(target_ts)
-            
+                
                 if partner_key in key_list: 
                     
                     partner_channels = ['partner ' + channel for channel in data_dict[partner_key]['channels']]
@@ -437,7 +436,7 @@ np.savez(str(path + f'ts_two_blocks_session_fb{which_freq_bands}'), *ts_two_bloc
 np.savez(str(path + f'ts_four_blocks_session_fb{which_freq_bands}'), *ts_four_blocks_session)
 
 ### Save information on channels
-np.savez(str(path + f'channels_one_brain_'), *channels_one_brain)
+np.savez(str(path + f'channels_one_brain'), *channels_one_brain)
 np.savez(str(path + f'channels_two_blocks'), *channels_two_blocks)
 np.savez(str(path + f'channels_four_blocks'), *channels_four_blocks)
 np.savez(str(path + f'channels_one_brain_session'), *channels_one_brain_session)
