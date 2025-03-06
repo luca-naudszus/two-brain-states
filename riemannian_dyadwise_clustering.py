@@ -74,15 +74,22 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     # ------------------------------------------------------------
     ### Get kernel matrices with HybridBlocks
     matrices = []
+    
     for in_channelgroup in range(len(X_seg)):
-        block_kernels = HybridBlocks(block_size=list(blocks_seg[in_channelgroup][0]),
+        actual_block_sizes = blocks_seg[in_channelgroup][0]
+        if sum_blocks: 
+            block_size = [actual_block_sizes[0+i*2] + actual_block_sizes[1+i*2] for i in range(exp_n_blocks)]
+        else: 
+            block_size = list(actual_block_sizes)
+        assert len(actual_block_sizes) == exp_n_blocks, "Too few blocks in data"
+        block_kernels = HybridBlocks(block_size=block_size,
                                  shrinkage=shrinkage,
                                  metrics=metrics)
         matrices.append(block_kernels.fit_transform(X_seg[in_channelgroup]))
 
     # ------------------------------------------------------------
     ### Project matrices into common space
-    print('Projecting matrices from into common space')
+    print('Projecting matrices into common space')
     target_dim = np.min(np.unique(channels_tmp))
     for in_channelgroup in range(0, len(matrices)):
         if matrices[in_channelgroup][0].shape[0] != target_dim:
@@ -148,7 +155,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     rand_score_id = adjusted_rand_score(classes, ids_common) if clustering == 'all' else np.nan
     rand_score_ses = adjusted_rand_score(classes, sessions_common) if clustering != 'session-wise' else np.nan
     rand_score_act = adjusted_rand_score(classes, activities_common)
-    rand_score_chs = adjusted_rand_score(classes, channels_common)
+    #rand_score_chs = adjusted_rand_score(classes, channels_common)
 
     # ------------------------------------------------------------
     ### PCA 
@@ -158,7 +165,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     X_pca = pca.fit_transform(X_tangent)
 
     # Plot
-    if plot == 1 and grid_search == 0: 
+    if plot and not grid_search: 
         # With classes as labels
         plt.figure(figsize=(6, 5))
         for label in np.unique(classes): 
@@ -201,29 +208,27 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
         plt.legend()
         plt.show()
     
-    return matrices, classes, activities_common, sessions_common, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, len(sessions_tmp)
+    results = [matrices, cluster_means, classes, activities_common, sessions_common, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, len(sessions_tmp)]
+    return results
 
 def get_counts(strings):
     a = b = c = d = 0
-    state_i = 'hbr'
-    state_j = 1
-    
+    participants = ['target', 'partner'] 
+    chromophore = ['hbo', 'hbr']
+    level1 = chromophore if type_of_data in {"four_blocks", "four_blocks_session"} else participants
+    level2 = participants if type_of_data in {"four_blocks", "four_blocks_session"} else chromophore
+
     for s in strings:
-        if s.endswith('hbr'):
-            if state_i == 'hbr' and state_j == 1:  
+        if s.find(level1[0]) != -1: 
+            if s.find(level2[0]) != -1:
                 a += 1
-            elif state_i == 'hbr' and state_j == 2:  
-                c += 1
-            elif state_i == 'hbo' and state_j == 1:
-                c += 1
-                state_j = 2
-            state_i = 'hbr'
-        elif s.endswith('hbo'):
-            if state_j == 1:
+            elif s.find(level2[1]) != -1:
                 b += 1
-            elif state_j == 2: 
+        elif s.startswith(level1[1]) != -1:
+            if s.find(level2[0]) != -1:
+                c += 1
+            elif s.find(level2[1]) != -1:
                 d += 1
-            state_i = 'hbo'
 
     return a, b, c, d
 
@@ -231,9 +236,11 @@ def get_counts(strings):
 ### Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "two_blocks"
+type_of_data = "four_blocks"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
+exp_block_size = 4 
+which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
 
 # do we want to use data with missing channels?
 use_missing_channels = True
@@ -255,18 +262,18 @@ demeaner_var = 'none' # 'none', 'id-wise', 'session-wise'
 demeaner_method = 'tangent' # 'log-euclidean', 'tangent', 'projection', or 'airm'
 # 'projection' takes the longest, but seems to give the best result
 
-# do we want to do a single run or a grid search? (0 = single run, 1 = grid search)
-grid_search = 0
-## in case of 0, define hyperparameters below
-## in case of 1, define parameter space below
+# do we want to do a single run or a grid search? (False = single run, True = grid search)
+grid_search = False
+## in case of False, define hyperparameters below
+## in case of True, define parameter space below
 
-# are we interested in the plot? (0/1, overridden in case of grid search: no plot)
-plot = 1
+# are we interested in the plot? (True/False, overridden in case of grid search: no plot)
+plot = True
 
 # hyperparameters (overridden in case of grid search)
 shrinkage = 0.01 # shrinkage value
 metrics = 'rbf' # kernel function
-n_clusters = 3 # number of clusters for k-means
+n_clusters = 2 # number of clusters for k-means
 
 # parameter space for grid search
 params_shrinkage = [0, 0.01, 0.1]
@@ -274,8 +281,6 @@ params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
 params_n_clusters = range(3, 8)
 
 # information on data
-#TODO: adapt for varying block sizes!
-block_size = 4 # number of channels for HbO and HbR
 upsampling_freq = 5 # frequency to which the data have been upsampled
 window_length = 15 # length of windows in s
 step_length = 1 # steps 
@@ -290,6 +295,7 @@ max_iter = 5 # maximum number of iterations for kMeans
 ### Load data. Do not change this section. 
 
 # Load the dataset
+#npz_data = np.load(f"./data/ts_{type_of_data}_fb{which_freq_bands}.npz")
 npz_data = np.load(f"./data/ts_{type_of_data}.npz")
 X = []
 for array in list(npz_data.files):
@@ -305,7 +311,7 @@ choices = ['alone', 'collab', 'diverse']
 y = np.select(conditions, choices, default='unknown')
 npz_channels = np.load(f"./data/channels_{type_of_data}.npz")
 channels = []
-for array in list(npz_rois.files):
+for array in list(npz_channels.files):
     channels.append(npz_channels[array])
 
 # make variable for chosen ids
@@ -325,68 +331,73 @@ blocks = np.array(blocks)
 n_channels = np.array([len(channels[i]) for i in range(0, len(channels))])
 
 # channels and block size
-if type_of_data == "one_brain":
+if type_of_data in {"one_brain", "one_brain_session"}:
     exp_n_channels = 8
-else: 
+    exp_n_blocks = 2 if exp_block_size == 4 else 1
+else:
     exp_n_channels = 16
-
+    exp_n_blocks = 4 if exp_block_size == 4 else 2
+sum_blocks = exp_block_size == 8
+if exp_block_size not in {4, 8}:
+    raise ValueError('Unknown expected block size. Choose from 4, 8.')
 
 # ------------------------------------------------------------
 ### Run pipeline. Do not change this section. 
 
-if grid_search == 0:
+if not grid_search:
     scores = []
     if clustering == 'full':
-        matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, n_activities = pipeline(
+        results = pipeline(
                 X, y, id=np.nan, session=np.nan, 
                 demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
                 plot=plot, window_length=window_length, step_length=step_length, 
                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
         scores.append(
-                ['all', 'all', sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, 
-                 rand_score_act, rand_score_ses, rand_score_id, n_activities]
+                ['all', 'all', results[5], results[6], results[7], results[8], 
+                    results[9], results[10], results[11], results[12], results[13]]
             )
+        matrices, cluster_means, classes = results[0], results[1], results[2]
     elif clustering == 'id-wise':
         for id in chosen_ids: 
-            matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, n_activities = pipeline(
+            results = pipeline(
                 X, y, id=id, session=np.nan, 
                 demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
                 plot=plot, window_length=window_length, step_length=step_length, 
                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
             scores.append(
-                [id, 'all', sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, 
-                 rand_score_act, rand_score_ses, rand_score_id, n_activities]
+                [id, 'all', results[5], results[6], results[7], results[8], 
+                    results[9], results[10], results[11], results[12], results[13]]
             )
+            matrices, cluster_means, classes = results[0], results[1], results[2]
     elif clustering == 'session-wise':
         for id in chosen_ids:
             # make variable for chosen sessions
             chosen_sessions = np.unique(sessions[ids == id]) if which_session == 'all' else [which_session]
 
             for session in chosen_sessions: 
-                matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, n_activities = pipeline(
+                results = pipeline(
                     X, y, id=id, session=session, 
                     demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
                     plot=plot, window_length=window_length, step_length=step_length, 
                     shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
                 scores.append(
-                    [id, session, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, 
-                     rand_score_act, rand_score_ses, rand_score_id, n_activities]
+                    [id, session, results[5], results[6], results[7], results[8], 
+                        results[9], results[10], results[11], results[12], results[13]]
                 ) 
+                matrices, cluster_means, classes = results[0], results[1], results[2]
     scores = pd.DataFrame(scores, columns = [
         'ID', 'Session', 'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
         'RandScoreActivities', 'RandScoreSessions', 'RandScoreIds', 'nActivities']
-    )
-        
+    )   
 
 # ------------------------------------------------------------
 ### Run grid search. Do not change this section. 
 
-if grid_search == 1:
+if grid_search:
     # Compute grid search parameters from inputs
-    # TODO: adapt for varying n_channels
-    comb_shrinkage = product(params_shrinkage, repeat = int(n_channels / block_size))
+    comb_shrinkage = product(params_shrinkage, repeat = exp_n_blocks)
     params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
-    comb_kernel = product(params_kernel, repeat = int(n_channels / block_size))
+    comb_kernel = product(params_kernel, repeat = exp_n_blocks)
     params_kernel_combinations = [list(x) for x in comb_kernel]
     params_n_clusters = range(3,10)
     plot = 0 # do not plot during grid search
@@ -400,36 +411,36 @@ if grid_search == 1:
                     i += 1
                     print(f"Iteration {i}, parameters: shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                     try:
-                        matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, db_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, rand_score_id, n_activities = pipeline(
+                        results = pipeline(
                         X, y, id=np.nan, session=np.nan, 
                         demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
                         plot=plot, window_length=window_length, step_length=step_length,
-                        shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+                        shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
                     except ValueError as e:
                         print(f"Skipping due to error: {e}")
                         continue
                     scores.append(
                         ['all', 'all', window_length, shrinkage, kernel, n_clusters, 
-                         sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline,
-                         rand_score_act, rand_score_ses, rand_score_id, n_activities]
+                            results[5], results[6], results[7], results[8], 
+                            results[9], results[10], results[11], results[12], results[13]]
                     )
                 elif clustering == 'id-wise':
                     for id in chosen_ids:
                         i += 1
                         print(f"Iteration {i}, parameters: ID {id}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                         try:
-                            matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, db_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, rand_score_id, n_activities = pipeline(
+                            results = pipeline(
                                 X, y, id=id, session=np.nan, 
                                 demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
                                 plot=plot, window_length=window_length, step_length=step_length,
-                                shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+                                shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
                         except ValueError as e:
                             print(f"Skipping due to error: {e}")  
                             continue
                         scores.append(
                             [id, 'all', window_length, shrinkage, kernel, n_clusters, 
-                             sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline,
-                             rand_score_act, rand_score_ses, rand_score_id, n_activities])
+                                results[5], results[6], results[7], results[8], 
+                                results[9], results[10], results[11], results[12], results[13]])
                 elif clustering == 'session-wise':
                     for id in chosen_ids:
                         chosen_sessions = np.unique(sessions[ids == id]) if which_session == 'all' else [which_session]
@@ -437,11 +448,11 @@ if grid_search == 1:
                             i += 1
                             print(f"Iteration {i}, parameters: ID {id}, session {session}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                             try:
-                                matrices, classes, trans_activities, trans_sessions, sh_score_pipeline, db_score_pipeline, ch_score_pipeline, rand_score_act, rand_score_ses, rand_score_id, n_activities = pipeline(
-                                X, y, id=id, session=session, 
-                                demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
-                                plot=plot, window_length=window_length, step_length=step_length,
-                                shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+                                results = pipeline(
+                                    X, y, id=id, session=session, 
+                                    demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
+                                    plot=plot, window_length=window_length, step_length=step_length,
+                                    shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
                             except ValueError as e:
                                 print(f"Skipping due to error: {e}")  # Optional: print the error message
                                 continue
@@ -450,17 +461,19 @@ if grid_search == 1:
                                 continue
                             scores.append(
                                 [id, session, window_length, shrinkage, kernel, n_clusters, 
-                                 sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline,
-                                rand_score_act, rand_score_ses, rand_score_id, n_activities])
+                                    results[5], results[6], results[7], results[8], 
+                                    results[9], results[10], results[11], results[12], results[13]])
     scores = pd.DataFrame(scores, columns=['ID', 'Session', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
                                        'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio'
                                        'RandScoreActivities', 'RandScoreSessions', 'RandScoreIds', 'nSessions'])
 
-#TODO: Find best clustering in scores
 
 # ------------------------------------------------------------
 ### Save results. Do not change this section. 
-#TODO: save clustering results, not only grid search results
 print("saving results")
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-scores.to_csv(f"results/results_{type_of_data}_{timestamp}.csv", index=False)
+scores.to_csv(f"results/parameter_space_scores_{type_of_data}_{timestamp}.csv", index=False)
+if not grid_search: 
+    np.save(f"results/matrices_{type_of_data}_{timestamp}.npy", matrices)
+    np.save(f"results/cluster_means_{type_of_data}_{timestamp}.npy", cluster_means)
+    np.save(f"results/classes_{type_of_data}_{timestamp}.npy", classes)
