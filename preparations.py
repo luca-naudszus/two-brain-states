@@ -19,7 +19,7 @@ path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational
 too_many_zeros = 100
 current_freq = 5
 verbosity = 40 #ERRORS and CRITICAL, but not WARNING, INFO, DEBUG
-which_freq_bands = 3 # Choose from: 0, 1, 2, 3. Frequency bands are below. 
+which_freq_bands = 0 # Choose from: 0, 1, 2, 3. Frequency bands are below. 
 freq_bands = [[0.015, 0.4], [0.1, 0.2], [0.03, 0.1], [0.02, 0.03]]
 
 inpath = str(path + "/preprocesseddata/")
@@ -52,7 +52,6 @@ for file in os.listdir(inpath):
         nirs_path = str(inpath + file)
         pID = int(file[4:7])
         session_n = int(file[16])
-        #TODO: for unfiltered data eliminated 123-1, 227-5, 231-5, 310-2, why?
 
         # read data
         data = mne.io.read_raw_fif(nirs_path, verbose=verbosity)

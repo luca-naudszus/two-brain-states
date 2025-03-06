@@ -7,6 +7,7 @@
 
 from datetime import datetime
 from itertools import product
+import json
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -239,7 +240,7 @@ def get_counts(strings):
 ### Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "four_blocks"
+type_of_data = "one-brain"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 4 
@@ -251,14 +252,14 @@ use_missing_channels = False
 
 # how do we want to cluster?
 # Choose from 'full', 'id-wise', 'session-wise'
-clustering = 'id-wise' 
+clustering = 'full' 
 # Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
-which_id = 2014 # set which_id = 'all' for all dyads/participants
+which_id = 'all' # set which_id = 'all' for all dyads/participants
 # Which session do we want to look at? (only for session-wise clustering)
 which_session = 'all' # set which_session = 'all' for all sessions
 
 # should the matrices be demeaned? 
-demean = True
+demean = False
 # if so, within-id or within-session?
 demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
 # if so, which method?
@@ -266,12 +267,12 @@ demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'a
 # 'projection' takes the longest, but seems to give the best result
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
-grid_search = False
+grid_search = True
 ## in case of False, define hyperparameters below
 ## in case of True, define parameter space below
 
 # are we interested in the plot? (True/False, overridden in case of grid search: no plot)
-plot = True
+plot = False
 
 # hyperparameters (overridden in case of grid search)
 shrinkage = 0.01 # shrinkage value
@@ -281,7 +282,7 @@ n_clusters = 5 # number of clusters for k-means
 # parameter space for grid search
 params_shrinkage = [0, 0.01, 0.1]
 params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
-params_n_clusters = range(3, 8)
+params_n_clusters = range(3, 10)
 
 # information on data
 upsampling_freq = 5 # frequency to which the data have been upsampled
@@ -346,6 +347,49 @@ if exp_block_size not in {4, 8}:
 # check demeaner
 if demean and (demeaner_method not in {'log-euclidean', 'tangent', 'projection', 'airm'}) or (demeaner_var not in {'id-wise', 'session-wise'}):
     raise ValueError("No method for demeaner set. Choose from 'log-euclidean', 'tangent', 'projection', 'airm'")
+
+# make dict
+freq_bands = [[0.015, 0.4], [0.1, 0.2], [0.03, 0.1], [0.02, 0.03]]
+if grid_search:
+    dict = {
+        "type_of_data": type_of_data,
+        "block_size": exp_block_size,
+        "l_freq": freq_bands[which_freq_bands][0],
+        "h_freq": freq_bands[which_freq_bands][1],
+        "use_missing_channels": use_missing_channels,
+        "clustering": clustering,
+        "which_id": ids,
+        "which_session": which_session,
+        "demean": demean,
+        "demeaner_method": demeaner_method,
+        "demeaner_var": demeaner_var,
+        "shrinkage": params_shrinkage,
+        "metrics": params_kernel,
+        "n_clusters": params_n_clusters,
+        "s_freq": upsampling_freq,
+        "window_size": window_length,
+        "step_size": step_length,
+    }
+else: 
+    dict = {
+        "type_of_data": type_of_data,
+        "block_size": exp_block_size,
+        "l_freq": freq_bands[which_freq_bands][0],
+        "h_freq": freq_bands[which_freq_bands][1],
+        "use_missing_channels": use_missing_channels,
+        "clustering": clustering,
+        "which_id": ids,
+        "which_session": which_session,
+        "demean": demean,
+        "demeaner_method": demeaner_method,
+        "demeaner_var": demeaner_var,
+        "shrinkage": shrinkage,
+        "metrics": metrics,
+        "n_clusters": n_clusters,
+        "s_freq": upsampling_freq,
+        "window_size": window_length,
+        "step_size": step_length,
+    }
 
 # ------------------------------------------------------------
 ### Run pipeline. Do not change this section. 
@@ -483,3 +527,6 @@ if not grid_search:
     np.save(f"results/matrices_{type_of_data}_{timestamp}.npy", matrices)
     np.save(f"results/cluster_means_{type_of_data}_{timestamp}.npy", cluster_means)
     np.save(f"results/classes_{type_of_data}_{timestamp}.npy", classes)
+json_object = json.dumps(dict, indent=4)
+with open(f"results/pipeline_description_{timestamp}.json", "w") as outfile: 
+    outfile.write(json_object)
