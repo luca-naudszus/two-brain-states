@@ -15,8 +15,14 @@ import re
 import scipy as sp
 
 path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data/"
-inpath = str(path + "/preprocesseddata/")
 
+too_many_zeros = 100
+current_freq = 5
+verbosity = 40 #ERRORS and CRITICAL, but not WARNING, INFO, DEBUG
+which_freq_bands = 3 # Choose from: 0, 1, 2, 3. Frequency bands are below. 
+freq_bands = [[0.015, 0.4], [0.1, 0.2], [0.03, 0.1], [0.02, 0.03]]
+
+inpath = str(path + "/preprocesseddata/")
 
 ### get list of true dyads
 dyads = pd.read_csv(str(path + "dyadList.csv"))
@@ -28,30 +34,26 @@ cutpoints = pd.read_excel(str(path + "cutpoints_videos.xlsx"))
 best_channels = pd.read_csv(str(path + 'fNIRS_chs_ROIproximal.csv'))
 expected_rois = {'l_ifg', 'l_tpj', 'r_ifg', 'r_tpj'}
 
-too_many_zeros = 100
-current_freq = 5
-verbosity = 40 #ERRORS and CRITICAL, but not WARNING, INFO, DEBUG
-which_freq_bands = 0 # Choose from: 0, 1, 2, 3. Frequency bands are below. 
-
-freq_bands = [[0.015, 0.4], [0.1, 0.2], [0.03, 0.1], [0.02, 0.03]]
 all_dict = {}
 roi_dict, channel_dict = {}, {}
 error_log = []
 for file in os.listdir(inpath):
     if file.endswith(".fif"):
+        
+        # test whether the recording has been broken
+        #TODO: deal with broken recordings, n = 6,
+        # this would give six more individual session data and four more dyad session data
+        #TODO: adapt re code
+        if re.match(r"^.+_.{1}_pre\.fif$", file):
+            error_log.append((file[:-8], 'recording is broken'))
+            continue
 
         # get path and info
         nirs_path = str(inpath + file)
         pID = int(file[4:7])
-        session_n = int(file[-9:-8])
+        session_n = int(file[16])
+        #TODO: for unfiltered data eliminated 123-1, 227-5, 231-5, 310-2, why?
 
-        # test whether the recording has been broken
-        #TODO: deal with broken recordings, n = 6,
-        # this would give six more individual session data and four more dyad session data
-        if re.match(r"^.+_.{1}_pre\.fif$", file):
-            error_log.append((file[:-8], 'recording is broken'))
-            continue
-        
         # read data
         data = mne.io.read_raw_fif(nirs_path, verbose=verbosity)
 
@@ -88,18 +90,19 @@ for file in os.listdir(inpath):
                            tmin = 0,
                            tmax = annot['duration'],
                            baseline = None,
-                           preload = True,
+                           preload = which_freq_bands != 0,
                            verbose=verbosity
                            )
-            epoch.filter(l_freq = freq_bands[which_freq_bands][0], 
-                         h_freq = freq_bands[which_freq_bands][0], 
+            if which_freq_bands != 0:
+                epoch.filter(l_freq = freq_bands[which_freq_bands][0], 
+                         h_freq = freq_bands[which_freq_bands][1], 
                          verbose=verbosity)
             assert len(epoch.drop_log[0]) == 0, 'Dropped all epochs here'
             epoch_list.append(epoch)
             i += 1
 
         # write into dictionary
-        keyname = file[:-8]
+        keyname = file[:17]
         all_dict[keyname] = epoch_list
         channel_dict[keyname] = chs
 
@@ -325,7 +328,10 @@ for i, row in dyads.iterrows():
                     ts_four = np.concatenate((target_ts[:int(len(target_channels)/2)], partner_ts[:int(len(partner_channels)/2)], target_ts[int(len(target_channels)/2):len(target_channels)], partner_ts[int(len(partner_channels)/2):len(partner_channels)]), axis=0)
                     ts_four_blocks.append(ts_four)
                     doc_four_blocks.extend([[row['dyadID'], session, activity]])
-                    channels_four_blocks.append((target_channels[:int(len(target_channels)/2)], partner_channels[:int(len(partner_channels)/2)], target_channels[int(len(target_channels)/2):len(target_channels)], partner_channels[int(len(partner_channels)/2):len(partner_channels)]))
+                    channels_four_blocks.append(np.concatenate((target_channels[:int(len(target_channels)/2)], 
+                                                               partner_channels[:int(len(partner_channels)/2)], 
+                                                               target_channels[int(len(target_channels)/2):len(target_channels)], 
+                                                               partner_channels[int(len(partner_channels)/2):len(partner_channels)])))
                     ts_four_temp.append(ts_four)
             # 1b target, one brain data as above, channel- and session-wise z-scored
             ## session-wise z-scoring
@@ -364,7 +370,10 @@ for i, row in dyads.iterrows():
                     # 3b, four blocks as above, channel- and session-wise z-scored
                     ts_four_blocks_session.append(ts_four_split[activity])
                     doc_four_blocks_session.extend([[row['dyadID'], session, activity]])
-                    channels_four_blocks.append((target_channels[:int(len(target_channels)/2)], partner_channels[:int(len(partner_channels)/2)], target_channels[int(len(target_channels)/2):len(target_channels)], partner_channels[int(len(partner_channels)/2):len(partner_channels)]))
+                    channels_four_blocks_session.append(np.concatenate((target_channels[:int(len(target_channels)/2)], 
+                                                               partner_channels[:int(len(partner_channels)/2)], 
+                                                               target_channels[int(len(target_channels)/2):len(target_channels)], 
+                                                               partner_channels[int(len(partner_channels)/2):len(partner_channels)])))
 
 doc_one_brain = pd.DataFrame(doc_one_brain)
 doc_two_blocks = pd.DataFrame(doc_two_blocks)
@@ -375,20 +384,22 @@ doc_four_blocks_session = pd.DataFrame(doc_four_blocks_session)
 
 # save
 doc_one_brain.to_csv(str(path + 'doc_one_brain.csv'))
-np.savez(str(path + f'ts_one_brain_fb{which_freq_bands}'), *ts_one_brain)
-np.savez(str(path + 'channels_one_brain'), *channels_one_brain)
 doc_two_blocks.to_csv(str(path + 'doc_two_blocks.csv'))
-np.savez(str(path + 'ts_two_blocks_fb{which_freq_bands}'), *ts_two_blocks)
-np.savez(str(path + 'channels_two_blocks'), *channels_two_blocks)
 doc_four_blocks.to_csv(str(path + 'doc_four_blocks.csv'))
-np.savez(str(path + 'ts_four_blocks_fb{which_freq_bands}'), *ts_four_blocks)
-np.savez(str(path + 'channels_four_blocks'), *channels_four_blocks)
 doc_one_brain_session.to_csv(str(path + 'doc_one_brain_session.csv'))
-np.savez(str(path + 'ts_one_brain_session_fb{which_freq_bands}'), *ts_one_brain_session)
-np.savez(str(path + 'channels_one_brain_session'), *channels_one_brain_session)
 doc_two_blocks_session.to_csv(str(path + 'doc_two_blocks_session.csv'))
-np.savez(str(path + 'ts_two_blocks_session_fb{which_freq_bands}'), *ts_two_blocks_session)
-np.savez(str(path + 'channels_two_blocks_session'), *channels_two_blocks_session)
 doc_four_blocks_session.to_csv(str(path + 'doc_four_blocks_session.csv'))
-np.savez(str(path + 'ts_four_blocks_session_fb{which_freq_bands}'), *ts_four_blocks_session)
-np.savez(str(path + 'channels_four_blocks_session'), *channels_four_blocks_session)
+
+np.savez(str(path + f'ts_one_brain_fb{which_freq_bands}'), *ts_one_brain)
+np.savez(str(path + f'ts_two_blocks_fb{which_freq_bands}'), *ts_two_blocks)
+np.savez(str(path + f'ts_four_blocks_fb{which_freq_bands}'), *ts_four_blocks)
+np.savez(str(path + f'ts_one_brain_session_fb{which_freq_bands}'), *ts_one_brain_session)
+np.savez(str(path + f'ts_two_blocks_session_fb{which_freq_bands}'), *ts_two_blocks_session)
+np.savez(str(path + f'ts_four_blocks_session_fb{which_freq_bands}'), *ts_four_blocks_session)
+
+np.savez(str(path + f'channels_one_brain_'), *channels_one_brain)
+np.savez(str(path + f'channels_two_blocks'), *channels_two_blocks)
+np.savez(str(path + f'channels_four_blocks'), *channels_four_blocks)
+np.savez(str(path + f'channels_one_brain_session'), *channels_one_brain_session)
+np.savez(str(path + f'channels_two_blocks_session'), *channels_two_blocks_session)
+np.savez(str(path + f'channels_four_blocks_session'), *channels_four_blocks_session)

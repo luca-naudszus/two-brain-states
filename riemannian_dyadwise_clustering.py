@@ -15,11 +15,7 @@ from pyriemann.utils.mean import mean_riemann
 from pyriemann.utils.tangentspace import tangent_space
 from sklearn.decomposition import PCA
 from sklearn.metrics import adjusted_rand_score, davies_bouldin_score
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import StratifiedKFold
-from sklearn.pipeline import Pipeline, make_pipeline
-from riemannianKMeans import Demeaner, FlattenTransformer, ListTimeSeriesWindowTransformer, HybridBlocks, RiemannianKMeans, ch_score, geodesic_distance_ratio, project_to_common_space, riemannian_davies_bouldin, riemannian_silhouette_score, riemannian_variance
+from riemannianKMeans import Demeaner, ListTimeSeriesWindowTransformer, HybridBlocks, RiemannianKMeans, ch_score, geodesic_distance_ratio, project_to_common_space, riemannian_davies_bouldin, riemannian_silhouette_score, riemannian_variance
 
 os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
 # ------------------------------------------------------------
@@ -43,6 +39,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     
     # ------------------------------------------------------------
     ### Group by number of channels and segment into windows
+    print("Preparing data")
     if use_missing_channels: 
         grouping_indices = [[np.where(np.array(channels_tmp) == channel_no)[0]] for channel_no in set(channels_tmp)]
     else:
@@ -89,11 +86,12 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
 
     # ------------------------------------------------------------
     ### Project matrices into common space
-    print('Projecting matrices into common space')
-    target_dim = np.min(np.unique(channels_tmp))
-    for in_channelgroup in range(0, len(matrices)):
-        if matrices[in_channelgroup][0].shape[0] != target_dim:
-            matrices[in_channelgroup] = project_to_common_space(matrices[in_channelgroup], target_dim)
+    if use_missing_channels:
+        print('Projecting matrices into common space')
+        target_dim = np.min(np.unique(channels_tmp))
+        for in_channelgroup in range(0, len(matrices)):
+            if matrices[in_channelgroup][0].shape[0] != target_dim:
+                matrices[in_channelgroup] = project_to_common_space(matrices[in_channelgroup], target_dim)
     X_common = np.concatenate(matrices)
     activities_common = np.concatenate(activities_seg)
     sessions_common = np.concatenate(sessions_seg)
@@ -105,21 +103,26 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     # Set group variables for demeaner
     if demean: 
         if clustering == 'full': 
-            if demeaner_var == 'ids':
+            if demeaner_var == 'id-wise':
                groups = ids_common
             elif demeaner_var == 'session-wise':
                 groups = sessions_common
             else: 
+                demean = False
                 print("Warning: will not demean because demeaning mode is unclear.")
         elif clustering == 'id-wise': 
             if demeaner_var == 'session-wise':
                 groups = sessions_common
             elif demeaner_var == 'id-wise': 
+                demean = False
                 print("Warning: will not demean id-wise because clustering is id-wise.")
             else: 
+                demean = False
                 print("Warning: will not demean because demeaning mode is unclear.")
         elif clustering == 'session-wise': 
+            demean = False
             print("Warning: will not demean because clustering is session-wise.")
+    if demean: 
         demeaner = Demeaner(groups=groups,
                         activate=demean,
                         method=demeaner_method)
@@ -243,7 +246,7 @@ exp_block_size = 4
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
 
 # do we want to use data with missing channels?
-use_missing_channels = True
+use_missing_channels = False
 # if so, data from all sessions are projected into a common space
 
 # how do we want to cluster?
@@ -252,14 +255,14 @@ clustering = 'id-wise'
 # Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
 which_id = 2014 # set which_id = 'all' for all dyads/participants
 # Which session do we want to look at? (only for session-wise clustering)
-which_session = 5 # set which_session = 'all' for all sessions
+which_session = 'all' # set which_session = 'all' for all sessions
 
 # should the matrices be demeaned? 
-demean = False
+demean = True
 # if so, within-id or within-session?
-demeaner_var = 'none' # 'none', 'id-wise', 'session-wise'
+demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
 # if so, which method?
-demeaner_method = 'tangent' # 'log-euclidean', 'tangent', 'projection', or 'airm'
+demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'airm'
 # 'projection' takes the longest, but seems to give the best result
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
@@ -272,8 +275,8 @@ plot = True
 
 # hyperparameters (overridden in case of grid search)
 shrinkage = 0.01 # shrinkage value
-metrics = 'rbf' # kernel function
-n_clusters = 2 # number of clusters for k-means
+metrics = 'cov' # kernel function
+n_clusters = 5 # number of clusters for k-means
 
 # parameter space for grid search
 params_shrinkage = [0, 0.01, 0.1]
@@ -282,7 +285,7 @@ params_n_clusters = range(3, 8)
 
 # information on data
 upsampling_freq = 5 # frequency to which the data have been upsampled
-window_length = 15 # length of windows in s
+window_length = 30 # length of windows in s
 step_length = 1 # steps 
 
 # define global settings
@@ -295,8 +298,7 @@ max_iter = 5 # maximum number of iterations for kMeans
 ### Load data. Do not change this section. 
 
 # Load the dataset
-#npz_data = np.load(f"./data/ts_{type_of_data}_fb{which_freq_bands}.npz")
-npz_data = np.load(f"./data/ts_{type_of_data}.npz")
+npz_data = np.load(f"./data/ts_{type_of_data}_fb{which_freq_bands}.npz")
 X = []
 for array in list(npz_data.files):
     X.append(npz_data[array])
@@ -340,6 +342,10 @@ else:
 sum_blocks = exp_block_size == 8
 if exp_block_size not in {4, 8}:
     raise ValueError('Unknown expected block size. Choose from 4, 8.')
+
+# check demeaner
+if demean and (demeaner_method not in {'log-euclidean', 'tangent', 'projection', 'airm'}) or (demeaner_var not in {'id-wise', 'session-wise'}):
+    raise ValueError("No method for demeaner set. Choose from 'log-euclidean', 'tangent', 'projection', 'airm'")
 
 # ------------------------------------------------------------
 ### Run pipeline. Do not change this section. 
