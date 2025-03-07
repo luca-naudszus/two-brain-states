@@ -35,7 +35,7 @@ from riemannianKMeans import (
 
 # ------------------------------------------------------------
 # Set path
-os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
+#os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
 outpath = 'results'
 
 # ------------------------------------------------------------
@@ -54,9 +54,9 @@ use_missing_channels = False
 
 # how do we want to cluster?
 # Choose from 'full', 'id-wise', 'session-wise'
-clustering = 'id-wise' 
+clustering = 'full' 
 # Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
-which_id = 105 # set which_id = 'all' for all dyads/participants
+which_id = 'all' # set which_id = 'all' for all dyads/participants
 # Which session do we want to look at? (only for session-wise clustering)
 which_session = 'all' # set which_session = 'all' for all sessions
 
@@ -69,7 +69,7 @@ demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'a
 # 'projection' takes the longest, but seems to give the best result
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
-grid_search = False
+grid_search = True
 ## in case of False, define hyperparameters below
 ## in case of True, define parameter space below
 
@@ -468,10 +468,12 @@ if not grid_search:
 
 if grid_search:
     # Compute grid search parameters from inputs
-    comb_shrinkage = product(params_shrinkage, repeat = exp_n_blocks)
-    params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
-    comb_kernel = product(params_kernel, repeat = exp_n_blocks)
-    params_kernel_combinations = [list(x) for x in comb_kernel]
+    #comb_shrinkage = product(params_shrinkage, repeat = exp_n_blocks)
+    #params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
+    params_shrinkage_combinations = params_shrinkage
+    #comb_kernel = product(params_kernel, repeat = exp_n_blocks)
+    #params_kernel_combinations = [list(x) for x in comb_kernel]
+    params_kernel_combinations = params_kernel
     params_n_clusters = range(3,10)
     plot = 0 # do not plot during grid search
 

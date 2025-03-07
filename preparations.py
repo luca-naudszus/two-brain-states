@@ -20,7 +20,8 @@ import mne
 
 # ------------------------------------------------------------
 # Set variables
-path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data"
+#path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data"
+path = "./data"
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
 upsampling_freq = 5
@@ -377,16 +378,16 @@ for i, row in dyads.iterrows():
                     
                     ### 3a, four blocks: target HbO, partner HbO, target HbR, partner HbR
                     lentchs, lenpchs = int(len(target_channels)), int(len(partner_channels))
-                    ts_four = np.concatenate((target_ts[:(lentchs/2)], 
-                                              partner_ts[:(lenpchs/2)], 
-                                              target_ts[(lentchs/2):lentchs], 
-                                              partner_ts[(lenpchs/2):lenpchs]), axis=0)
+                    ts_four = np.concatenate((target_ts[:int(lentchs/2)], 
+                                              partner_ts[:int(lenpchs/2)], 
+                                              target_ts[int(lentchs/2):lentchs], 
+                                              partner_ts[int(lenpchs/2):lenpchs]), axis=0)
                     ts["four_blocks"]["channel-wise"].append(ts_four)
                     doc["four_blocks"].extend([[row['dyadID'], session, activity]])
-                    channels["four_blocks"].append(np.concatenate((target_channels[:(lentchs/2)], 
-                                                               partner_channels[:(lenpchs/2)], 
-                                                               target_channels[(lentchs/2):lentchs], 
-                                                               partner_channels[(lenpchs/2):lenpchs])), axis=0)
+                    channels["four_blocks"].append(np.concatenate((target_channels[:int(lentchs/2)], 
+                                                               partner_channels[:int(lenpchs/2)], 
+                                                               target_channels[int(lentchs/2):lentchs], 
+                                                               partner_channels[int(lenpchs/2):lenpchs]), axis=0))
                     ts_four_temp.append(ts_four)
             
             ### 1b target, one brain data as above, channel- and session-wise z-scored
