@@ -46,11 +46,11 @@ class WindowTransformer(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         return self
 
-    def transform(self, X, is_labels, n_windows, window_size=75, step_size=None):
+    def transform(self, X, is_labels, n_windows):
         if not is_labels:
             assert isinstance(X, np.ndarray), "Input must be a NumPy array"
             assert X.ndim == 2, "Unexpected input shape" 
-            if self.step_size == None: 
+            if self.step_size is None: 
                 truncated_length = n_windows * self.window_size
                 n_channels = X.shape[0]
                 X_windows = X[:, :truncated_length].reshape(n_channels, n_windows, self.window_size)
@@ -75,7 +75,7 @@ class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
         list_windows = []
         for x in X: 
             n_samples = x.shape[1]
-            if self.step_size == None: 
+            if self.step_size is None: 
                 n_windows = n_samples // self.window_size
             else: 
                 n_windows = (n_samples - self.window_size) // self.step_size + 1
@@ -84,7 +84,11 @@ class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
         return self
     
     def transform(self, X, is_labels=False):
+        if not hasattr(self, 'list_windows_'):
+            raise ValueError("The transformer must be fitted before calling transform.")
         transformed_x = [self.base_transformer.transform(x, is_labels, self.list_windows_[i]) for i, x in enumerate(X)]
+        if not transformed_x:
+            raise ValueError("No valid windows found. Check your input time series.")
         return np.concatenate(transformed_x, axis = 0)
     
 class Stacker(TransformerMixin):
@@ -355,7 +359,7 @@ class Demeaner(BaseEstimator, TransformerMixin):
         Author: Luca Naudszus."""
     def __init__(self, groups, method="tangent", activate=False):
         self.activate = activate
-        self.groups = groups
+        self.groups = np.array(groups)
         self.method = method # "log-euclidean", "tangent", "projection", "airm"
 
     def fit(self, X, y=None):
@@ -363,17 +367,17 @@ class Demeaner(BaseEstimator, TransformerMixin):
     
     def transform(self, X):
         if self.activate:
-            if self.method == 'log-euclidean':
-                print("Demeaning matrices by log-euclidean centering")
-            elif self.method == 'tangent':
-                print("Demeaning matrices by tangent space centering")
-            elif self.method == 'projection':
-                print("Demeaning matrices by projection to SPD after euclidean centering")
-            elif self.method == 'airm':
-                print("Demeaning matrices using AIRM-centered tangent space")
-            else:
+            methods = {
+                "log-euclidean": log_euclidean_centering,
+                "tangent": tangent_space_centering,
+                "projection": euclidean_centering_with_projection,
+                "airm": airm_centering,
+            }
+
+            if self.method not in methods:
                 raise ValueError("Invalid method. Choose from 'log-euclidean', 'tangent', 'projection', or 'airm'.")
-            
+
+            print(f"Demeaning matrices using {self.method} centering")
             unique_labels = np.unique(self.groups)
             demeaned_matrices = np.empty_like(X)
             
@@ -426,7 +430,7 @@ class RiemannianKMeans(BaseEstimator, ClusterMixin):
         print(f"KMeans: Predicting data with shape {X.shape}")
         return self.kmeans.predict(X)
 
-    def fit_predict(self, X):
+    def fit_predict(self, X, y=None):
         return self.fit(X).labels_
 
 def riemannian_silhouette_score(matrices, labels, n_jobs = n_jobs, distance=distance_riemann): 
@@ -450,6 +454,7 @@ def riemannian_silhouette_score(matrices, labels, n_jobs = n_jobs, distance=dist
     print(f"SilhouetteScore: Processing stratified sample of {n_matrices} data points")
     
     # (3) Parallel execution of distance calculation
+    #TODO: How does pairwise_distances from pyriemann work?
     def compute_distance(i, j, matrices, distance):
         return distance(matrices[i], matrices[j])
 
