@@ -12,6 +12,7 @@ from pathlib import Path
 import os
 import re
 #---
+from collections import defaultdict
 import numpy as np
 import pandas as pd
 import scipy as sp
@@ -31,58 +32,58 @@ freq_bands = [[0.015, 0.4], [0.1, 0.2], [0.03, 0.1], [0.02, 0.03]]
 
 # ------------------------------------------------------------
 # Define custom functions
-def check_for_missing(ts):
-    return np.isnan(ts).sum() > 0 or (ts == 0).sum() > too_many_zeros
+def check_for_missing(ts, too_many_zeros=too_many_zeros):
+    return np.any(np.isnan(ts)) or (ts == 0).sum() > too_many_zeros
 
-def set_data_dict(dict, key, interpolation):
-    dict[key] = {
+def set_data_dict(data_dict, key, interpolation, duration_list, true_duration_list, channel_dict):
+    data_dict[key] = {
             'interpolation': interpolation,
             'duration': duration_list,
             'true_duration_list': true_duration_list,
             'channels': channel_dict[key]}
-    return dict
+    return data_dict
 
 def get_partner_info(targetID, dyads):
-    if dyads.pID1.isin([targetID]).any():
-        partnerID = dyads.pID2[dyads.pID1 == targetID].iloc[0]
-        dyadID = dyads.dyadID[dyads.pID1 == targetID].values
-    elif dyads.pID2.isin([targetID]).any():
-        partnerID = dyads.pID1[dyads.pID2 == targetID].iloc[0]
-        dyadID = dyads.dyadID[dyads.pID2 == targetID].values
-    else: 
-        partnerID, dyadID = None, None
-    return partnerID, dyadID
+    row = dyads.query("pID1 == @targetID or pID2 == @targetID")
+    if not row.empty:
+        partnerID = row.pID2.iloc[0] if row.pID1.iloc[0] == targetID else row.pID1.iloc[0]
+        dyadID = row.dyadID.tolist()
+        return partnerID, dyadID
+    return None, None
 
 def interpolate_timeseries(source_ts, target_length): 
     ### Interpolate partner timeseries to length of target time series
     x_axis = np.arange(source_ts.shape[1])
-    interpolated = np.zeros([source_ts.shape[0], target_length])
+    interpolated = np.empty([source_ts.shape[0], target_length])
     for in_channel in range(source_ts.shape[0]):
-        interpolated[in_channel] = sp.interpolate.CubicSpline(x_axis, source_ts[in_channel])(np.linspace(x_axis.min(), x_axis.max(), target_length))
+        interpolated[in_channel] = sp.interpolate.CubicSpline(x_axis, source_ts[in_channel])(np.linspace(0, source_ts.shape[1] - 1, target_length))
     return interpolated
 
 def compute_true_duration(dyadID, session_n, in_epoch, cutpoints, upsampling_freq):
     ### Get true start and end
-    filtered_cutpoints = cutpoints[(cutpoints.Pair.values == dyadID) & (cutpoints.Session.values == session_n)]
-    current_start, next_start = filtered_cutpoints.Start[filtered_cutpoints.Task == in_epoch + 1], filtered_cutpoints.Start[filtered_cutpoints.Task == in_epoch + 2]
+    filtered_cutpoints = cutpoints.query("Pair == @dyadID and Session == @session_n")
+    current_start, next_start = filtered_cutpoints.Start[filtered_cutpoints.Task == in_epoch + 1], \
+                                filtered_cutpoints.Start[filtered_cutpoints.Task == in_epoch + 2]
                 
     ### If this is known, find out task duration. 
     if not current_start.empty and not next_start.empty and not current_start.isna().iloc[0] and not next_start.isna().iloc[0]:
-        current_start_time = datetime.combine(datetime(1, 1, 1), current_start.iloc[0])
-        next_start_time = datetime.combine(datetime(1, 1, 1), next_start.iloc[0])
-        true_duration = int((next_start_time - current_start_time).total_seconds())
-        task_duration = filtered_cutpoints.Length[filtered_cutpoints.Task == in_epoch + 1]
-        task_duration_secs = (datetime.combine(datetime.min, task_duration.iloc[0]) - datetime.min).total_seconds()
+        true_duration = int((next_start.iloc[0] - current_start.iloc[0]).total_seconds())
+        task_duration_secs = filtered_cutpoints.Length.iloc[0].total_seconds()
+        
     ### If not, we need to assume that the interpolated duration is correct. 
     else:
-        true_duration = np.nan
-        task_duration_secs = 300  
+        true_duration, task_duration_secs = np.nan, 300  
 
     return true_duration, round(task_duration_secs * upsampling_freq)
 
 def get_and_zscore(list, activity): 
     ts = sp.stats.zscore(list[activity], axis=1, ddof=1)
     return ts
+
+def zscore_and_split(ts_list):
+    n_samples = [ts.shape[1] for ts in ts_list]
+    return np.split(sp.stats.zscore(np.concatenate(ts_list, axis=1), ddof=1),
+                    np.cumsum(n_samples)[:-1], axis=1)
 
 def add_durations(targetID, session_n, in_epoch, duration_epoch, true_duration):
     true_duration_list.append(true_duration)
@@ -170,9 +171,11 @@ for file in os.listdir(inpath):
 # Align onsets
 
 ### To this end, we move outside the fif structure and work only on the timeseries.
-key_list = list(all_dict.keys())
-data_dict, original_lengths, durations = {}, [], []
+key_list = set(all_dict.keys())
+data_dict, original_lengths, durations, preprocessed_keys = {}, [], [], []
 for key in key_list:
+    if key in preprocessed_keys: 
+        continue
     # ------------------------------------------------------------
     # Get information on target and partner
     target = all_dict[key]
@@ -196,17 +199,16 @@ for key in key_list:
             
             ### Load target time series
             target_ts = target[in_epoch].get_data(copy = False, verbose=verbosity)[0]
-            if check_for_missing(target_ts): 
-                error_log.append((f'sub-{targetID}_session-{session_n}', 'nans or too many zeros in data'))
-                error_log.append((partner_key, 'nans or too many zeros in partner data'))
-                valid_data = False
-                break
             
             ### Load partner time series
             partner_ts = partner[in_epoch].get_data(copy = False, verbose=verbosity)[0]
-            if check_for_missing(partner_ts): 
-                error_log.append((f'sub-{targetID}_session-{session_n}', 'nans or too many zeros in partner data'))
-                error_log.append((partner_key, 'nans or too many zeros in data'))
+            
+            ### Check if data is missing
+            if check_for_missing(partner_ts) or check_for_missing(target_ts): 
+                error_log.extend([
+                    (f'sub-{targetID}_session-{session_n}', 'nans or too many zeros in target or partner data'),
+                    (partner_key, 'nans or too many zeros in target or partner data')
+                    ])
                 valid_data = False
                 break
 
@@ -215,27 +217,19 @@ for key in key_list:
                 [targetID, partnerID, session_n, in_epoch, np.shape(target_ts)[1], np.shape(partner_ts)[1]])
             
             # ------------------------------------------------------------
-            # Find out which duration is longer, this will be the duration at which we aim.
+            # Interpolate timeseries
             
-            if np.shape(target_ts)[1] > np.shape(partner_ts)[1]:
-                ### Interpolate partner timeseries to length of target time series
-                partner_interp = interpolate_timeseries(partner_ts, target_ts.shape[1])
-                target_interp = np.copy(target_ts)
-                duration_list.append(np.shape(target_interp)[1]/upsampling_freq)
-            
-            elif np.shape(partner_ts)[1] > np.shape(target_ts)[0]:
-                ### Interpolate target timeseries to length of partner time series
-                target_interp = interpolate_timeseries(target_ts, partner_ts.shape[1])
-                partner_interp = np.copy(partner_ts)
-                duration_list.append(np.shape(partner_interp)[1]/upsampling_freq)
-            
-            else:
-                ### If both time series have the same length, there is no need to interpolate
-                target_interp = np.copy(target_ts)
-                partner_interp = np.copy(partner_ts)
-                duration_list.append(np.shape(target_interp)[1] / upsampling_freq)
+            ### Find out which duration is longer, this will be the duration at which we aim.
+            len_target, len_partner = target_ts.shape[1], partner_ts.shape[1]
+            len_interp = max(len_target, len_partner)
 
-            assert np.shape(target_interp)[1] == np.shape(partner_interp)[1], f"Interpolation for {targetID} has not properly worked"
+            ### Interpolate timeseries with shorter duration (unless both have equal length)
+            target_interp = target_ts if len_target == len_interp else interpolate_timeseries(target_ts, len_interp)
+            partner_interp = partner_ts if len_partner == len_interp else interpolate_timeseries(partner_ts, len_interp)
+
+            duration_list.append(len_interp / upsampling_freq)
+
+            assert target_interp.shape()[1] == partner_interp.shape()[1], f"Interpolation for {targetID} has not properly worked"
             
             # ------------------------------------------------------------
             # Compare interpolated duration with true duration to assess which time has actually passed
@@ -258,14 +252,14 @@ for key in key_list:
 
         # ------------------------------------------------------------
         # remove partner from key_list because they have been interpolated
-        key_list.remove(partner_key)
+        preprocessed_keys.add(partner_key)
 
         # ------------------------------------------------------------
         # Update dictionaries
         if not valid_data:
             continue
-        data_dict = set_data_dict(data_dict, key, target_list)
-        data_dict = set_data_dict(data_dict, partner_key, partner_list)
+        data_dict = set_data_dict(data_dict, key, target_list, duration_list, true_duration_list, channel_dict)
+        data_dict = set_data_dict(data_dict, partner_key, partner_list, duration_list, true_duration_list, channel_dict)
 
     # ------------------------------------------------------------
     # Compare recorded duration with true duration to assess which time has actually passed (see above). 
@@ -277,7 +271,7 @@ for key in key_list:
         
         for in_epoch in range(0, len(target)):
             target_interp = target[in_epoch].get_data(copy = False, verbose=verbosity)[0]
-            duration_list.append(np.shape(target_interp)[1] / upsampling_freq)
+            duration_list.append(target_interp.shape()[1] / upsampling_freq)
             
             ### We only have information on true duration for first three activities: 
             if in_epoch != len(target)-1: 
@@ -293,63 +287,35 @@ for key in key_list:
 
         # ------------------------------------------------------------
         # Update dictionaries
-        data_dict = set_data_dict(data_dict, key, target_list)
+        data_dict = set_data_dict(data_dict, key, target_list, duration_list, true_duration_list, channel_dict)
         error_log.append((f'sub-{targetID}_session-{session_n}', 'partner data missing'))
 
 # ------------------------------------------------------------
-# Make data frame containing original lengths of target and partner time series
-df_lengths = pd.DataFrame(original_lengths)
-df_lengths.columns = ['target', 'partner', 'session', 'task', 'target_length', 'partner_length']
-df_lengths['ratio'] = df_lengths.target_length / df_lengths.partner_length
-df_lengths.ratio = np.where(df_lengths.ratio < 1, 1 / df_lengths.ratio,
-                            df_lengths.ratio)
-
-# ------------------------------------------------------------
-# Make data frame containing the true and interpolated durations of target and partner time series
-df_durations = pd.DataFrame(durations)
+# Make data frame containing the original lengths, and true and interpolated durations of target and partner time series
+df_lengths, df_durations = pd.DataFrame(original_lengths), pd.DataFrame(durations)
 df_durations.columns = ['target', 'session', 'task', 'interpolated_duration', 'true_duration']
-df_durations['ratio'] = df_durations.interpolated_duration / df_durations.true_duration
-df_durations.ratio = np.where(df_durations.ratio < 1, 1 / df_durations.ratio,
-                            df_durations.ratio)
+df_lengths.columns = ['target', 'partner', 'session', 'task', 'target_length', 'partner_length']
+for df, num, denom in [(df_lengths, 'target_length', 'partner_length'),
+                        (df_durations, 'interpolated_duration', 'true_duration')]:
+    df['ratio'] = df[num] / df[denom]
+    df['ratio'] = max(df['ratio'], 1 / df['ratio'])
 
 # ------------------------------------------------------------
 # Concatenate data in a meaningful way
 
-ts = {
-    "one_brain": {
-        "channel-wise": [],
-        "session-wise": []
-    },
-    "two_blocks": {
-        "channel-wise": [],
-        "session-wise": []
-    },
-    "four_blocks": {
-        "channel-wise": [],
-        "session-wise": []
-    }
-}
-doc = {
-    "one_brain": [],
-    "two_blocks": [],
-    "four_blocks": [] 
-}
-channels = {
-    "one_brain": [],
-    "two_blocks": [],
-    "four_blocks": [] 
-}
+ts = defaultdict(lambda: defaultdict(list))
+doc, channels = defaultdict(list), defaultdict(list)
 key_list = set(data_dict.keys())
 for i, row in dyads.iterrows():
 
     for session in range(6):
-        target_key = f"sub-{row['pID1']}_session-{session + 1}"
+        target_key, partner_key = (f"sub-{row[pID]}_session-{session + 1}" for pID in ['pID1', 'pID2'])
         if target_key in key_list: 
             ### 
             target_list = data_dict[target_key]['interpolation']
             target_channels = ['target ' + channel for channel in data_dict[target_key]['channels']]
-            partner_key = f"sub-{row['pID2']}_session-{session + 1}"
             ts_target_temp, ts_partner_temp, ts_two_temp, ts_four_temp = [], [], [], []
+            
             for activity in range(4):
                 target_ts = get_and_zscore(target_list, activity)
                 ### 1a target, one brain data (two blocks: HbO + HbR), channel-wise z-scored
@@ -392,26 +358,15 @@ for i, row in dyads.iterrows():
             
             ### 1b target, one brain data as above, channel- and session-wise z-scored
             ## session-wise z-scoring
-            n_samples = [ts.shape[1] for ts in ts_target_temp]
-            ts_target_temp = sp.stats.zscore(np.concatenate(ts_target_temp, axis = 1), ddof=1)
-            ts_target_split = np.split(ts_target_temp, np.cumsum(n_samples)[:-1], axis=1)
+            ts_target_split = zscore_and_split(ts_target_temp)
 
             ## append to list
             for activity in range(4):
                 ts["one_brain"]["session-wise"].append(ts_target_split[activity])
             if partner_key in key_list: 
                 ### session-wise z-scoring
-                n_samples = [ts.shape[1] for ts in ts_partner_temp]
-                ts_partner_temp = sp.stats.zscore(np.concatenate(ts_partner_temp, axis=1), ddof=1)
-                ts_partner_split = np.split(ts_partner_temp, np.cumsum(n_samples)[:-1], axis=1)
-
-                n_samples = [ts.shape[1] for ts in ts_two_temp]
-                ts_two_temp = sp.stats.zscore(np.concatenate(ts_two_temp, axis=1), ddof=1)
-                ts_two_split = np.split(ts_two_temp, np.cumsum(n_samples)[:-1], axis=1)
-
-                n_samples = [ts.shape[1] for ts in ts_four_temp]
-                ts_four_temp = sp.stats.zscore(np.concatenate(ts_four_temp, axis=1), ddof=1)
-                ts_four_split = np.split(ts_four_temp, np.cumsum(n_samples)[:-1], axis=1)
+                ts_partner_split, ts_two_split, ts_four_split = map(zscore_and_split, 
+                                                    [ts_partner_temp, ts_two_temp, ts_four_temp])
                 
                 ## append to list
                 for activity in range(4):

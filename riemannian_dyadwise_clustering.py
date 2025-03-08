@@ -35,17 +35,17 @@ from riemannianKMeans import (
 
 # ------------------------------------------------------------
 # Set path
-#os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
+os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
 outpath = 'results'
 
 # ------------------------------------------------------------
 # Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "one_brain"
+type_of_data = "two_blocks"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
-exp_block_size = 4 
+exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
 
 # do we want to use data with missing channels?
@@ -69,7 +69,7 @@ demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'a
 # 'projection' takes the longest, but seems to give the best result
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
-grid_search = True
+grid_search = False
 ## in case of False, define hyperparameters below
 ## in case of True, define parameter space below
 
@@ -100,7 +100,11 @@ max_iter = 5 # maximum number of iterations for kMeans
 # ------------------------------------------------------------
 # Define custom functions. Do not change this section. 
 
-def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, window_length, step_length, shrinkage, metrics, n_clusters): 
+def pipeline(X, y, id, session, 
+             clustering, sessions, ids, blocks, n_channels, 
+             demean, demeaner_var, demeaner_method, plot, 
+             window_length, step_length, 
+             shrinkage, metrics, n_clusters): 
     
     # ------------------------------------------------------------
     ### Get data
@@ -109,12 +113,15 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
         print(f"Data loaded: {len(X_tmp)} trials")
     elif clustering == 'id-wise':
         indices = np.where(ids == id)[0]
+        if len(indices) == 0:
+            raise ValueError(f"ID {id} and session {session} not found in dataset.")
         X_tmp, y_tmp, sessions_tmp, ids_tmp, blocks_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [blocks[i] for i in indices], [n_channels[i] for i in indices]
         print(f"Data loaded for id {id}: {len(X_tmp)} trials")
     elif clustering == 'session-wise':
         indices = np.where((ids == id) & (sessions == session))[0]
+        if len(indices) == 0:
+            raise ValueError(f"ID {id} and session {session} not found in dataset.")
         X_tmp, y_tmp, sessions_tmp, ids_tmp, blocks_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [blocks[i] for i in indices], [n_channels[i] for i in indices]
-        assert len(indices) != 0, 'ID-session combination does not exist in data set.'
         print(f"Data loaded for id {id} and session {session}: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
     
     # ------------------------------------------------------------
@@ -140,7 +147,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     X_seg, activities_seg, sessions_seg, ids_seg, blocks_seg, channels_seg = [], [], [], [], [], []
     
     # Transform into windows
-    for in_channelgroup in range(0, len(X_grouped)):
+    for in_channelgroup in range(len(X_grouped)):
         X_seg.append(windowsTransformer.fit_transform(X_grouped[in_channelgroup]))
         activities_seg.append(windowsTransformer.transform(activities_grouped[in_channelgroup], is_labels=True))
         sessions_seg.append(windowsTransformer.transform(sessions_grouped[in_channelgroup], is_labels=True))
@@ -158,7 +165,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
             block_size = [actual_block_sizes[0+i*2] + actual_block_sizes[1+i*2] for i in range(exp_n_blocks)]
         else: 
             block_size = list(actual_block_sizes)
-        assert len(actual_block_sizes) == exp_n_blocks, "Block number in data does not match expected block number."
+        assert len(block_size) == exp_n_blocks, "Block number in data does not match expected block number."
         block_kernels = HybridBlocks(block_size=block_size,
                                  shrinkage=shrinkage,
                                  metrics=metrics)
@@ -169,7 +176,7 @@ def pipeline(X, y, id, session, demean, demeaner_var, demeaner_method, plot, win
     if use_missing_channels:
         print('Projecting matrices into common space')
         target_dim = np.min(np.unique(channels_tmp))
-        for in_channelgroup in range(0, len(matrices)):
+        for in_channelgroup in range(len(matrices)):
             if matrices[in_channelgroup][0].shape[0] != target_dim:
                 matrices[in_channelgroup] = project_to_common_space(matrices[in_channelgroup], target_dim)
     X_common = np.concatenate(matrices)
@@ -302,15 +309,15 @@ def get_counts(strings):
     level2 = participants if type_of_data in {"four_blocks", "four_blocks_session"} else chromophore
 
     for s in strings:
-        if s.find(level1[0]) != -1 or type_of_data in {"one_brain", "one_brain_session"}: 
-            if s.find(level2[0]) != -1:
+        if level1[0] in s or type_of_data in {"one_brain", "one_brain_session"}: 
+            if level2[0] in s:
                 a += 1
-            elif s.find(level2[1]) != -1:
+            elif level2[1] in s:
                 b += 1
-        elif s.find(level1[1]) != -1:
-            if s.find(level2[0]) != -1:
+        elif level1[1] in s:
+            if level2[0] in s:
                 c += 1
-            elif s.find(level2[1]) != -1:
+            elif level2[1] in s:
                 d += 1
 
     if type_of_data in {"one_brain", "one_brain_session"}:
@@ -341,20 +348,17 @@ for array in list(npz_channels.files):
     channels.append(npz_channels[array])
 
 # make variable for chosen ids
-chosen_ids = np.unique(ids) if which_id == 'all' else [which_id]
+chosen_ids = np.unique(ids) if which_id == 'all' else np.atleast_1d(which_id)
 
 # choose only drawing alone and collaborative drawing
-X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
 drawing_indices = np.where(y != 'diverse')[0]
+X = [X[i] for i in drawing_indices]
 y = y[drawing_indices]
 ids = ids[drawing_indices]
 sessions = sessions[drawing_indices]
 channels = [channels[i] for i in drawing_indices]
-blocks = []
-for i in range(len(channels)):
-    blocks.append(get_counts(channels[i]))
-blocks = np.array(blocks)
-n_channels = np.array([len(channels[i]) for i in range(0, len(channels))])
+blocks = np.array([get_counts(ch) for ch in channels])
+n_channels = np.array([len(ch) for ch in channels])
 
 # channels and block size
 if type_of_data in {"one_brain", "one_brain_session"}:
@@ -367,52 +371,46 @@ sum_blocks = exp_block_size == 8
 if exp_block_size not in {4, 8}:
     raise ValueError('Unknown expected block size. Choose from 4, 8.')
 
-# check demeaner
-if demean and (demeaner_method not in {'log-euclidean', 'tangent', 'projection', 'airm'}) or (demeaner_var not in {'id-wise', 'session-wise'}):
-    raise ValueError("No method for demeaner set. Choose from 'log-euclidean', 'tangent', 'projection', 'airm'")
+# checks
+if clustering not in {'full', 'id-wise', 'session-wise'}:
+    raise ValueError(f"Unknown clustering type: {clustering}. Choose from 'full', 'id-wise', or 'session-wise'.")
+if demean:
+    if demeaner_method not in {'log-euclidean', 'tangent', 'projection', 'airm'}:
+        raise ValueError("Invalid demeaner method. Choose from 'log-euclidean', 'tangent', 'projection', 'airm'")
+    if demeaner_var not in {'id-wise', 'session-wise'}:
+        raise ValueError("Invalid demeaner variable. Choose 'id-wise' or 'session-wise'")
 
 # make dict
 freq_bands = [[0.015, 0.4], [0.1, 0.2], [0.03, 0.1], [0.02, 0.03]]
+pipeline_metadata = {
+    "type_of_data": type_of_data,
+    "block_size": exp_block_size,
+    "l_freq": freq_bands[which_freq_bands][0],
+    "h_freq": freq_bands[which_freq_bands][1],
+    "use_missing_channels": use_missing_channels,
+    "clustering": clustering,
+    "which_id": which_id, 
+    "which_session": which_session,
+    "demean": demean,
+    "demeaner_method": demeaner_method,
+    "demeaner_var": demeaner_var,
+    "s_freq": upsampling_freq,
+    "window_size": window_length,
+    "step_size": step_length,
+}
+
 if grid_search:
-    dict = {
-        "type_of_data": type_of_data,
-        "block_size": exp_block_size,
-        "l_freq": freq_bands[which_freq_bands][0],
-        "h_freq": freq_bands[which_freq_bands][1],
-        "use_missing_channels": use_missing_channels,
-        "clustering": clustering,
-        "which_id": which_id,
-        "which_session": which_session,
-        "demean": demean,
-        "demeaner_method": demeaner_method,
-        "demeaner_var": demeaner_var,
+    pipeline_metadata.update({
         "shrinkage": params_shrinkage,
         "metrics": params_kernel,
         "n_clusters": params_n_clusters,
-        "s_freq": upsampling_freq,
-        "window_size": window_length,
-        "step_size": step_length,
-    }
-else: 
-    dict = {
-        "type_of_data": type_of_data,
-        "block_size": exp_block_size,
-        "l_freq": freq_bands[which_freq_bands][0],
-        "h_freq": freq_bands[which_freq_bands][1],
-        "use_missing_channels": use_missing_channels,
-        "clustering": clustering,
-        "which_id": which_id, 
-        "which_session": which_session,
-        "demean": demean,
-        "demeaner_method": demeaner_method,
-        "demeaner_var": demeaner_var,
+    })
+else:
+    pipeline_metadata.update({
         "shrinkage": shrinkage,
         "metrics": metrics,
         "n_clusters": n_clusters,
-        "s_freq": upsampling_freq,
-        "window_size": window_length,
-        "step_size": step_length,
-    }
+    })
 
 # ------------------------------------------------------------
 ### Run pipeline. Do not change this section. 
@@ -422,46 +420,59 @@ if not grid_search:
     if clustering == 'full':
         results = pipeline(
                 X, y, id=np.nan, session=np.nan, 
+                clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
                 demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
                 plot=plot, window_length=window_length, step_length=step_length, 
                 shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+        # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
+        # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+        # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
         scores.append(
                 ['all', 'all', results[5], results[6], results[7], results[8], 
                     results[9], results[10], results[11], results[12], results[13]]
             )
+        
         matrices, cluster_means, classes = results[0], results[1], results[2]
-    elif clustering == 'id-wise':
+    else:
         for id in chosen_ids: 
-            results = pipeline(
-                X, y, id=id, session=np.nan, 
-                demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
-                plot=plot, window_length=window_length, step_length=step_length, 
-                shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
-            scores.append(
-                [id, 'all', results[5], results[6], results[7], results[8], 
-                    results[9], results[10], results[11], results[12], results[13]]
-            )
-            matrices, cluster_means, classes = results[0], results[1], results[2]
-    elif clustering == 'session-wise':
-        for id in chosen_ids:
-            # make variable for chosen sessions
-            chosen_sessions = np.unique(sessions[ids == id]) if which_session == 'all' else [which_session]
+            if clustering == "session-wise":
+                chosen_sessions = np.unique(sessions[ids == id]) if which_session == 'all' else [which_session]
 
-            for session in chosen_sessions: 
+                for session in chosen_sessions: 
+                    results = pipeline(
+                        X, y, id=id, session=session, 
+                        clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
+                        demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
+                        plot=plot, window_length=window_length, step_length=step_length, 
+                        shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+                    # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
+                    # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                    # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
+                    scores.append(
+                        [id, session, results[5], results[6], results[7], results[8], 
+                            results[9], results[10], results[11], results[12], results[13]]
+                        ) 
+                    matrices, cluster_means, classes = results[0], results[1], results[2]
+            else: 
                 results = pipeline(
-                    X, y, id=id, session=session, 
+                    X, y, id=id, session=np.nan, 
+                    clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
                     demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
                     plot=plot, window_length=window_length, step_length=step_length, 
                     shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+                # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
+                # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                 scores.append(
-                    [id, session, results[5], results[6], results[7], results[8], 
-                        results[9], results[10], results[11], results[12], results[13]]
-                ) 
+                    [id, 'all', results[5], results[6], results[7], results[8], 
+                    results[9], results[10], results[11], results[12], results[13]]
+                    )
                 matrices, cluster_means, classes = results[0], results[1], results[2]
+            # make variable for chosen sessions
     scores = pd.DataFrame(scores, columns = [
         'ID', 'Session', 'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
         'RandScoreActivities', 'RandScoreSessions', 'RandScoreIds', 'nActivities']
-    )   
+        )   
 
 # ------------------------------------------------------------
 ### Run grid search. Do not change this section. 
@@ -488,54 +499,66 @@ if grid_search:
                     try:
                         results = pipeline(
                         X, y, id=np.nan, session=np.nan, 
+                        clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
                         demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
                         plot=plot, window_length=window_length, step_length=step_length,
                         shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
                     except ValueError as e:
                         print(f"Skipping due to error: {e}")
                         continue
+                    # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
+                    # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                    # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                     scores.append(
                         ['all', 'all', window_length, shrinkage, kernel, n_clusters, 
                             results[5], results[6], results[7], results[8], 
                             results[9], results[10], results[11], results[12], results[13]]
                     )
-                elif clustering == 'id-wise':
+                else:
                     for id in chosen_ids:
-                        i += 1
-                        print(f"Iteration {i}, parameters: ID {id}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
-                        try:
-                            results = pipeline(
-                                X, y, id=id, session=np.nan, 
-                                demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
-                                plot=plot, window_length=window_length, step_length=step_length,
-                                shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
-                        except ValueError as e:
-                            print(f"Skipping due to error: {e}")  
-                            continue
-                        scores.append(
-                            [id, 'all', window_length, shrinkage, kernel, n_clusters, 
-                                results[5], results[6], results[7], results[8], 
-                                results[9], results[10], results[11], results[12], results[13]])
-                elif clustering == 'session-wise':
-                    for id in chosen_ids:
-                        chosen_sessions = np.unique(sessions[ids == id]) if which_session == 'all' else [which_session]
-                        for session in chosen_sessions:
+                        if clustering == 'session-wise':
+                            chosen_sessions = np.unique(sessions[ids == id]) if which_session == 'all' else [which_session]
+                            for session in chosen_sessions:
+                                i += 1
+                                print(f"Iteration {i}, parameters: ID {id}, session {session}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
+                                try:
+                                    results = pipeline(
+                                        X, y, id=id, session=session, 
+                                        clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
+                                        demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
+                                        plot=plot, window_length=window_length, step_length=step_length,
+                                        shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
+                                except ValueError as e:
+                                    print(f"Skipping due to error: {e}")  # Optional: print the error message
+                                    continue
+                                except AssertionError as e:
+                                    print(f"Skipping due to error: {e}")  # Optional: print the error message
+                                    continue
+                                # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
+                                # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                                # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities 
+                                scores.append(
+                                    [id, session, window_length, shrinkage, kernel, n_clusters, 
+                                        results[5], results[6], results[7], results[8], 
+                                        results[9], results[10], results[11], results[12], results[13]])
+                        else: 
                             i += 1
-                            print(f"Iteration {i}, parameters: ID {id}, session {session}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
+                            print(f"Iteration {i}, parameters: ID {id}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
                             try:
                                 results = pipeline(
-                                    X, y, id=id, session=session, 
+                                    X, y, id=id, session=np.nan, 
+                                    clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
                                     demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
                                     plot=plot, window_length=window_length, step_length=step_length,
                                     shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
                             except ValueError as e:
-                                print(f"Skipping due to error: {e}")  # Optional: print the error message
+                                print(f"Skipping due to error: {e}")  
                                 continue
-                            except AssertionError as e:
-                                print(f"Skipping due to error: {e}")  # Optional: print the error message
-                                continue
+                            # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
+                            # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                            # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                             scores.append(
-                                [id, session, window_length, shrinkage, kernel, n_clusters, 
+                                [id, 'all', window_length, shrinkage, kernel, n_clusters, 
                                     results[5], results[6], results[7], results[8], 
                                     results[9], results[10], results[11], results[12], results[13]])
     scores = pd.DataFrame(scores, columns=['ID', 'Session', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
@@ -547,11 +570,11 @@ if grid_search:
 ### Save results. Do not change this section. 
 print("saving results")
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-scores.to_csv(Path(outpath, f"parameter_space_scores_{type_of_data}_{timestamp}.csv"), index=False)
+scores.to_csv(Path(outpath) / f"parameter_space_scores_{type_of_data}_{timestamp}.csv", index=False)
 if not grid_search: 
-    np.save(Path(outpath, f"matrices_{type_of_data}_{timestamp}.npy"), matrices)
-    np.save(Path(outpath, f"cluster_means_{type_of_data}_{timestamp}.npy"), cluster_means)
-    np.save(Path(outpath, f"classes_{type_of_data}_{timestamp}.npy"), classes)
-json_object = json.dumps(dict, indent=4)
-with open(Path(outpath, f"pipeline_description_{timestamp}.json"), "w") as outfile: 
+    np.save(Path(outpath) / f"matrices_{type_of_data}_{timestamp}.npy", matrices)
+    np.save(Path(outpath) /f"cluster_means_{type_of_data}_{timestamp}.npy", cluster_means)
+    np.save(Path(outpath) / f"classes_{type_of_data}_{timestamp}.npy", classes)
+json_object = json.dumps(pipeline_metadata, indent=4)
+with open(Path(outpath) / f"pipeline_description_{timestamp}.json", "w") as outfile: 
     outfile.write(json_object)
