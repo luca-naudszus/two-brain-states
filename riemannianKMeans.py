@@ -16,7 +16,7 @@ from pyriemann.estimation import (
 )
 from pyriemann.utils.base import expm, invsqrtm, logm, sqrtm
 from pyriemann.utils.covariance import cov_est_functions
-from pyriemann.utils.distance import distance_riemann, distance_wasserstein
+from pyriemann.utils.distance import distance_riemann, distance_wasserstein, pairwise_distance
 from pyriemann.utils.mean import mean_riemann
 from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
 from sklearn.compose import ColumnTransformer
@@ -454,20 +454,7 @@ def riemannian_silhouette_score(matrices, labels, n_jobs = n_jobs, distance=dist
     print(f"SilhouetteScore: Processing stratified sample of {n_matrices} data points")
     
     # (3) Parallel execution of distance calculation
-    #TODO: How does pairwise_distances from pyriemann work?
-    def compute_distance(i, j, matrices, distance):
-        return distance(matrices[i], matrices[j])
-
-    pairwise_distances = Parallel(n_jobs=n_jobs)(
-        delayed(compute_distance)(i, j, stratified_matrices, distance)
-        for i in range(n_matrices) for j in range(i+1, n_matrices)
-    )
-    
-    # (4) Convert list into full distance matrix
-    pairwise_distances_matrix = np.zeros((n_matrices, n_matrices))
-    idx = np.triu_indices(n_matrices, 1)
-    pairwise_distances_matrix[idx] = pairwise_distances
-    pairwise_distances_matrix += pairwise_distances_matrix.T
+    pairwise_distances_matrix = pairwise_distance(stratified_matrices, metric=distance)
 
     # (5) Calculate silhouette score
     score = silhouette_score(pairwise_distances_matrix, stratified_labels, metric='precomputed')
