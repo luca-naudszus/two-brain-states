@@ -7,7 +7,7 @@
 
 # ------------------------------------------------------------
 # Import packages
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import os
 import re
@@ -21,8 +21,8 @@ import mne
 
 # ------------------------------------------------------------
 # Set variables
-#path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data"
-path = "./data"
+path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data"
+#path = "./data"
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
 upsampling_freq = 5
@@ -67,9 +67,12 @@ def compute_true_duration(dyadID, session_n, in_epoch, cutpoints, upsampling_fre
                 
     ### If this is known, find out task duration. 
     if not current_start.empty and not next_start.empty and not current_start.isna().iloc[0] and not next_start.isna().iloc[0]:
-        true_duration = int((next_start.iloc[0] - current_start.iloc[0]).total_seconds())
-        task_duration_secs = filtered_cutpoints.Length.iloc[0].total_seconds()
-        
+        current_start_time = datetime.combine(datetime.min, current_start.iloc[0])
+        next_start_time = datetime.combine(datetime.min, next_start.iloc[0])
+        true_duration = int((next_start_time - current_start_time).total_seconds())
+        task_duration = filtered_cutpoints.Length[filtered_cutpoints.Task == in_epoch + 1].iloc[0]
+        task_duration_secs = timedelta(hours=task_duration.hour, minutes=task_duration.minute, seconds=task_duration.second).total_seconds()
+    
     ### If not, we need to assume that the interpolated duration is correct. 
     else:
         true_duration, task_duration_secs = np.nan, 300  
@@ -172,7 +175,7 @@ for file in os.listdir(inpath):
 
 ### To this end, we move outside the fif structure and work only on the timeseries.
 key_list = set(all_dict.keys())
-data_dict, original_lengths, durations, preprocessed_keys = {}, [], [], []
+data_dict, original_lengths, durations, preprocessed_keys = {}, [], [], set()
 for key in key_list:
     if key in preprocessed_keys: 
         continue
@@ -229,7 +232,7 @@ for key in key_list:
 
             duration_list.append(len_interp / upsampling_freq)
 
-            assert target_interp.shape()[1] == partner_interp.shape()[1], f"Interpolation for {targetID} has not properly worked"
+            assert target_interp.shape[1] == partner_interp.shape[1], f"Interpolation for {targetID} has not properly worked"
             
             # ------------------------------------------------------------
             # Compare interpolated duration with true duration to assess which time has actually passed
@@ -271,7 +274,7 @@ for key in key_list:
         
         for in_epoch in range(0, len(target)):
             target_interp = target[in_epoch].get_data(copy = False, verbose=verbosity)[0]
-            duration_list.append(target_interp.shape()[1] / upsampling_freq)
+            duration_list.append(target_interp.shape[1] / upsampling_freq)
             
             ### We only have information on true duration for first three activities: 
             if in_epoch != len(target)-1: 
@@ -298,7 +301,7 @@ df_lengths.columns = ['target', 'partner', 'session', 'task', 'target_length', '
 for df, num, denom in [(df_lengths, 'target_length', 'partner_length'),
                         (df_durations, 'interpolated_duration', 'true_duration')]:
     df['ratio'] = df[num] / df[denom]
-    df['ratio'] = max(df['ratio'], 1 / df['ratio'])
+    df['ratio'] = np.maximum(df['ratio'], 1 / df['ratio'])
 
 # ------------------------------------------------------------
 # Concatenate data in a meaningful way

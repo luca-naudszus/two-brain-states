@@ -454,6 +454,7 @@ def riemannian_silhouette_score(matrices, labels, n_jobs = n_jobs, distance=dist
     print(f"SilhouetteScore: Processing stratified sample of {n_matrices} data points")
     
     # (3) Parallel execution of distance calculation
+    #TODO: Ensure execution is parallel
     pairwise_distances_matrix = pairwise_distance(stratified_matrices, metric=distance)
 
     # (5) Calculate silhouette score
