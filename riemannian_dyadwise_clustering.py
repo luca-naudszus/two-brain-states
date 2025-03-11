@@ -54,9 +54,9 @@ use_missing_channels = False
 
 # how do we want to cluster?
 # Choose from 'full', 'id-wise', 'session-wise'
-clustering = 'full' 
+clustering = 'id-wise'
 # Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
-which_id = 'all' # set which_id = 'all' for all dyads/participants
+which_id = 2014 # set which_id = 'all' for all dyads/participants
 # Which session do we want to look at? (only for session-wise clustering)
 which_session = 'all' # set which_session = 'all' for all sessions
 
@@ -69,7 +69,7 @@ demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'a
 # 'projection' takes the longest, but seems to give the best result
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
-grid_search = False
+grid_search = True
 ## in case of False, define hyperparameters below
 ## in case of True, define parameter space below
 
@@ -82,9 +82,9 @@ metrics = 'cov' # kernel function
 n_clusters = 5 # number of clusters for k-means
 
 # parameter space for grid search
-params_shrinkage = [0, 0.01, 0.1]
-params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
-params_n_clusters = range(3, 10)
+params_shrinkage = [0] #, 0.01, 0.1]
+params_kernel = ['cov'] #, 'rbf', 'lwf', 'tyl', 'corr']
+params_n_clusters = range(3, 4) #, 10)
 
 # information on data
 upsampling_freq = 5 # frequency to which the data have been upsampled
@@ -470,7 +470,8 @@ if not grid_search:
                 matrices, cluster_means, classes = results[0], results[1], results[2]
             # make variable for chosen sessions
     scores = pd.DataFrame(scores, columns = [
-        'ID', 'Session', 'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
+        'ID', 'Session', 
+        'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
         'RandScoreActivities', 'RandScoreSessions', 'RandScoreIds', 'nActivities']
         )   
 
@@ -485,7 +486,6 @@ if grid_search:
     #comb_kernel = product(params_kernel, repeat = exp_n_blocks)
     #params_kernel_combinations = [list(x) for x in comb_kernel]
     params_kernel_combinations = params_kernel
-    params_n_clusters = range(3,10)
     plot = 0 # do not plot during grid search
 
     scores = []
@@ -506,13 +506,13 @@ if grid_search:
                     except ValueError as e:
                         print(f"Skipping due to error: {e}")
                         continue
-                    # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
-                    # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                    # Append id, sessions, window length, shrinkage, kernel, number of clusters,
+                    # SilhouetteCoefficient, CalinskiHarabaszScore, RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
                     # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                     scores.append(
                         ['all', 'all', window_length, shrinkage, kernel, n_clusters, 
-                            results[5], results[6], results[7], results[8], 
-                            results[9], results[10], results[11], results[12], results[13]]
+                            results[5], results[6], results[7], results[8], results[9],
+                            results[10], results[11], results[12], results[13]]
                     )
                 else:
                     for id in chosen_ids:
@@ -534,13 +534,14 @@ if grid_search:
                                 except AssertionError as e:
                                     print(f"Skipping due to error: {e}")  # Optional: print the error message
                                     continue
-                                # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
-                                # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
-                                # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities 
+                                # Append id, session, window length, shrinkage, kernel, number of clusters,
+                                # SilhouetteCoefficient, CalinskiHarabaszScore, RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                                # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                                 scores.append(
-                                    [id, session, window_length, shrinkage, kernel, n_clusters, 
-                                        results[5], results[6], results[7], results[8], 
-                                        results[9], results[10], results[11], results[12], results[13]])
+                                        [id, session, window_length, shrinkage, kernel, n_clusters, 
+                                        results[5], results[6], results[7], results[8], results[9],
+                                        results[10], results[11], results[12], results[13]]
+                                )
                         else: 
                             i += 1
                             print(f"Iteration {i}, parameters: ID {id}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
@@ -554,16 +555,17 @@ if grid_search:
                             except ValueError as e:
                                 print(f"Skipping due to error: {e}")  
                                 continue
-                            # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
-                            # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                            # Append id, session, window length, shrinkage, kernel, number of clusters,
+                            # SilhouetteCoefficient, CalinskiHarabaszScore, RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
                             # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                             scores.append(
-                                [id, 'all', window_length, shrinkage, kernel, n_clusters, 
-                                    results[5], results[6], results[7], results[8], 
-                                    results[9], results[10], results[11], results[12], results[13]])
+                                        [id, 'all', window_length, shrinkage, kernel, n_clusters, 
+                                        results[5], results[6], results[7], results[8], results[9],
+                                        results[10], results[11], results[12], results[13]]
+                            )
     scores = pd.DataFrame(scores, columns=['ID', 'Session', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
-                                       'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio'
-                                       'RandScoreActivities', 'RandScoreSessions', 'RandScoreIds', 'nSessions'])
+                                       'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
+                                       'RandScoreActivities', 'RandScoreSessions', 'RandScoreIds', 'nActivities'])
 
 
 # ------------------------------------------------------------
