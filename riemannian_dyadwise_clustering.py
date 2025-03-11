@@ -54,9 +54,9 @@ use_missing_channels = False
 
 # how do we want to cluster?
 # Choose from 'full', 'id-wise', 'session-wise'
-clustering = 'id-wise'
+clustering = 'full'
 # Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
-which_id = 2014 # set which_id = 'all' for all dyads/participants
+which_id = 'all' # set which_id = 'all' for all dyads/participants
 # Which session do we want to look at? (only for session-wise clustering)
 which_session = 'all' # set which_session = 'all' for all sessions
 
@@ -69,17 +69,17 @@ demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'a
 # 'projection' takes the longest, but seems to give the best result
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
-grid_search = True
+grid_search = False
 ## in case of False, define hyperparameters below
 ## in case of True, define parameter space below
 
 # are we interested in the plot? (True/False, overridden in case of grid search: no plot)
-plot = False
+plot = True
 
 # hyperparameters (overridden in case of grid search)
-shrinkage = 0.01 # shrinkage value
-metrics = 'cov' # kernel function
-n_clusters = 5 # number of clusters for k-means
+shrinkage = 0.1 # shrinkage value
+metrics = 'rbf' # kernel function
+n_clusters = 8 # number of clusters for k-means
 
 # parameter space for grid search
 params_shrinkage = [0] #, 0.01, 0.1]
@@ -229,7 +229,8 @@ def pipeline(X, y, id, session,
     
     # ------------------------------------------------------------
     ### Clustering performance evaluation
-    sh_score_pipeline = riemannian_silhouette_score(matrices, classes)
+    #sh_score_pipeline = riemannian_silhouette_score(matrices, classes)
+    sh_score_pipeline = np.nan
     ch_score_pipeline = ch_score(matrices, classes)
     riem_var_pipeline = [riemannian_variance(clusters[i], cluster_means[i]) for i in range(n_clusters)]
     db_score_pipeline = riemannian_davies_bouldin(clusters, cluster_means)
@@ -298,7 +299,7 @@ def pipeline(X, y, id, session,
         plt.legend()
         plt.show()
     
-    results = [matrices, cluster_means, classes, activities_common, sessions_common, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, len(sessions_tmp)]
+    results = [matrices, cluster_means, classes, activities_common, sessions_common, ids_common, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, len(sessions_tmp)]
     return results
 
 def get_counts(strings):
@@ -428,11 +429,10 @@ if not grid_search:
         # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
         # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
         scores.append(
-                ['all', 'all', results[5], results[6], results[7], results[8], 
-                    results[9], results[10], results[11], results[12], results[13]]
+                ['all', 'all', results[6], results[7], results[8], results[9], results[10],
+                    results[11], results[12], results[13], results[14]]
             )
         
-        matrices, cluster_means, classes = results[0], results[1], results[2]
     else:
         for id in chosen_ids: 
             if clustering == "session-wise":
@@ -449,10 +449,10 @@ if not grid_search:
                     # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
                     # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                     scores.append(
-                        [id, session, results[5], results[6], results[7], results[8], 
-                            results[9], results[10], results[11], results[12], results[13]]
+                        [id, session, 
+                            results[6], results[7], results[8], results[9], results[10],
+                            results[11], results[12], results[13], results[14]]
                         ) 
-                    matrices, cluster_means, classes = results[0], results[1], results[2]
             else: 
                 results = pipeline(
                     X, y, id=id, session=np.nan, 
@@ -464,16 +464,19 @@ if not grid_search:
                 # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
                 # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                 scores.append(
-                    [id, 'all', results[5], results[6], results[7], results[8], 
-                    results[9], results[10], results[11], results[12], results[13]]
+                    [id, 'all', 
+                        results[6], results[7], results[8], results[9], results[10],
+                        results[11], results[12], results[13], results[14]]
                     )
-                matrices, cluster_means, classes = results[0], results[1], results[2]
-            # make variable for chosen sessions
     scores = pd.DataFrame(scores, columns = [
         'ID', 'Session', 
         'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
         'RandScoreActivities', 'RandScoreSessions', 'RandScoreIds', 'nActivities']
-        )   
+        ) 
+    matrices, cluster_means, classes, activities, sessions, ids = results[0], results[1], results[2], results[3], results[4], results[5]
+    results_table = pd.DataFrame(np.stack((classes, activities, sessions, ids), axis = 1), 
+                                 columns = ['classes', 'activities', 'sessions', 'ids'])
+      
 
 # ------------------------------------------------------------
 ### Run grid search. Do not change this section. 
@@ -511,8 +514,8 @@ if grid_search:
                     # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                     scores.append(
                         ['all', 'all', window_length, shrinkage, kernel, n_clusters, 
-                            results[5], results[6], results[7], results[8], results[9],
-                            results[10], results[11], results[12], results[13]]
+                            results[6], results[7], results[8], results[9], results[10],
+                            results[11], results[12], results[13], results[14]]
                     )
                 else:
                     for id in chosen_ids:
@@ -539,8 +542,8 @@ if grid_search:
                                 # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                                 scores.append(
                                         [id, session, window_length, shrinkage, kernel, n_clusters, 
-                                        results[5], results[6], results[7], results[8], results[9],
-                                        results[10], results[11], results[12], results[13]]
+                                        results[6], results[7], results[8], results[9], results[10],
+                                        results[11], results[12], results[13], results[14]]
                                 )
                         else: 
                             i += 1
@@ -560,8 +563,8 @@ if grid_search:
                             # RandScoreActivities, RandScoreSessions, RandScoreIds, nActivities
                             scores.append(
                                         [id, 'all', window_length, shrinkage, kernel, n_clusters, 
-                                        results[5], results[6], results[7], results[8], results[9],
-                                        results[10], results[11], results[12], results[13]]
+                                        results[6], results[7], results[8], results[9], results[10],
+                                        results[11], results[12], results[13], results[14]]
                             )
     scores = pd.DataFrame(scores, columns=['ID', 'Session', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
                                        'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
@@ -577,6 +580,7 @@ if not grid_search:
     np.save(Path(outpath) / f"matrices_{type_of_data}_{timestamp}.npy", matrices)
     np.save(Path(outpath) /f"cluster_means_{type_of_data}_{timestamp}.npy", cluster_means)
     np.save(Path(outpath) / f"classes_{type_of_data}_{timestamp}.npy", classes)
+    results_table.to_csv(Path(outpath) / f"results_table_{type_of_data}_{timestamp}.csv", index=False)
 json_object = json.dumps(pipeline_metadata, indent=4)
 with open(Path(outpath) / f"pipeline_description_{timestamp}.json", "w") as outfile: 
     outfile.write(json_object)
