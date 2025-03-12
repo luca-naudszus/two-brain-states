@@ -42,11 +42,15 @@ outpath = 'results'
 # Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "two_blocks"
+type_of_data = "four_blocks"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
+
+# do we want to generate pseudo dyads?
+#TODO: Implement pseudo dyads
+pseudo_dyads = False
 
 # do we want to use data with missing channels?
 use_missing_channels = False
@@ -79,7 +83,7 @@ plot = True
 # hyperparameters (overridden in case of grid search)
 shrinkage = 0.1 # shrinkage value
 metrics = 'rbf' # kernel function
-n_clusters = 8 # number of clusters for k-means
+n_clusters = 3 # number of clusters for k-means
 
 # parameter space for grid search
 params_shrinkage = [0] #, 0.01, 0.1]

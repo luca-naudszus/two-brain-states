@@ -4,6 +4,7 @@
 
 from joblib import Parallel, delayed
 #---
+from itertools import combinations
 import numpy as np
 import pandas as pd
 from scipy.linalg import block_diag
@@ -622,3 +623,32 @@ def project_to_common_space(matrices, target_dim):
         projected_matrices.append(expm(log_proj))  # map back to SPD space
     
     return np.array(projected_matrices)
+
+def pseudodyads(ids, true_dyads):
+    permutations = list(combinations(ids, 2))
+    pseudo_dyads = []
+    for [pID1, pID2] in permutations: 
+        if pID1 == pID2: 
+            continue
+        if pID1 in true_dyads.pID1 and true_dyads.pID2[
+                true_dyads.pID1 == pID1] == pID2: 
+            pair = True
+            dyadID = true_dyads.dyadID[true_dyads.pID1 == pID1][0]
+            group = "same" if dyadID < 2000 else "inter"
+        elif pID1 in true_dyads.pID2 and true_dyads.pID1[
+                true_dyads.pID2 == pID1] == pID2:
+            pair = True
+            dyadID = true_dyads.dyadID[true_dyads.pID2 == pID1][0]
+            group = "same" if dyadID < 2000 else "inter"
+        else: 
+            pair = False
+            dyadID = np.nan
+            group = "none"
+        pseudo_dyads.append(
+            [pID1, pID2, pair, dyadID, group]
+        )
+    pseudo_dyads = pd.DataFrame(pseudo_dyads,
+                                columns = [
+                                    "pID1", "pID2", "dyadType", "dyadID", "group"
+                                ])
+    return pseudo_dyads
