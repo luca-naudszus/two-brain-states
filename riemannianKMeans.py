@@ -624,25 +624,26 @@ def project_to_common_space(matrices, target_dim):
     
     return np.array(projected_matrices)
 
-def pseudodyads(ids, true_dyads):
+def pseudodyads(true_dyads):
+    ids = true_dyads.pID1.tolist() + true_dyads.pID2.tolist()
     permutations = list(combinations(ids, 2))
     pseudo_dyads = []
     for [pID1, pID2] in permutations: 
         if pID1 == pID2: 
             continue
-        if pID1 in true_dyads.pID1 and true_dyads.pID2[
+        if pID1 in true_dyads.pID1.values and true_dyads.pID2.values[
                 true_dyads.pID1 == pID1] == pID2: 
             pair = True
-            dyadID = true_dyads.dyadID[true_dyads.pID1 == pID1][0]
+            dyadID = true_dyads.dyadID.values[true_dyads.pID1 == pID1][0]
             group = "same" if dyadID < 2000 else "inter"
-        elif pID1 in true_dyads.pID2 and true_dyads.pID1[
+        elif pID1 in true_dyads.pID2.values and true_dyads.pID1.values[
                 true_dyads.pID2 == pID1] == pID2:
             pair = True
             dyadID = true_dyads.dyadID[true_dyads.pID2 == pID1][0]
             group = "same" if dyadID < 2000 else "inter"
         else: 
             pair = False
-            dyadID = np.nan
+            dyadID = str(pID1) + "_" + str(pID2)
             group = "none"
         pseudo_dyads.append(
             [pID1, pID2, pair, dyadID, group]

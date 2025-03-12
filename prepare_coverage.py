@@ -29,11 +29,10 @@ results_table = pd.read_csv(fn)
 # Calculate coverage
 coverage_table = []
 if type_of_data == "one_brain": 
-    ids = list(set(results_table.ids))
     true_dyads = pd.read_csv(Path("data") / "dyadList.csv")
-    dyads = pseudodyads(ids, true_dyads) 
+    dyads = pseudodyads(true_dyads) 
     for i, row in dyads.iterrows(): 
-        targetID, partnerID, group, dyadID = row['pID1'], row['pID2'], row['group'], row['dyadID']
+        targetID, partnerID, dyadType, dyadID, group = row['pID1'], row['pID2'], row['dyadType'], row['dyadID'], row['group'], 
         for session in range(6):
             for activity in sorted(set(results_table.activities)):
                 target = results_table.classes[
@@ -49,11 +48,19 @@ if type_of_data == "one_brain":
                     for cluster in np.unique(clusters):
                         n = np.sum((clusters[:,0] == clusters[:,1]) & (clusters[:,0] == cluster))
                         coverage_table.append(
-                        [n, dyadID, group, session, activity, cluster]
+                        [n, dyadID, dyadType, group, session, activity, cluster]
                         )
 else: 
     for id in sorted(set(results_table.ids)):
-        group = "same" if str(id).startswith("1") else "inter"
+        if (len(str(id)) == 4): 
+            dyadType = True
+            if str(id).startswith("1"): 
+                group = "same"
+            else:
+                group = "inter"
+        else:
+            dyadType = False
+            group = "none"
         for session in sorted(set(results_table.sessions)):
             for activity in sorted(set(results_table.activities)):
                 n_total = len(results_table[
@@ -68,10 +75,10 @@ else:
                             (results_table.sessions == session) & 
                             (results_table.ids == id)]) / n_total
                         coverage_table.append(
-                        [n, id, group, session, activity, cluster]
+                        [n, id, dyadType, group, session, activity, cluster]
                         )
 coverage_table = pd.DataFrame(coverage_table, 
-             columns = ['n', 'id', 'group', 'session', 'activity', 'cluster'])
+             columns = ['n', 'id', 'dyadType', 'group', 'session', 'activity', 'cluster'])
 
 # ------------------------------------------------------------
 ### Save results. 

@@ -49,7 +49,6 @@ exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
 
 # do we want to generate pseudo dyads?
-#TODO: Implement pseudo dyads
 pseudo_dyads = False
 
 # do we want to use data with missing channels?
@@ -334,11 +333,12 @@ def get_counts(strings):
 ### Load data. Do not change this section. 
 
 # Load the dataset
-npz_data = np.load(f"./data/ts_{type_of_data}_fb{which_freq_bands}.npz")
+pseudo = "true" if pseudo_dyads else "false"
+npz_data = np.load(f"./data/ts_{type_of_data}_fb-{which_freq_bands}_pseudo-{pseudo}.npz")
 X = []
 for array in list(npz_data.files):
     X.append(npz_data[array])
-doc = pd.read_csv(f"./data/doc_{type_of_data}.csv", index_col = 0)
+doc = pd.read_csv(f"./data/doc_{type_of_data}_pseudo-{pseudo}.csv", index_col = 0)
 ids = np.array(doc['0'])
 sessions = np.array(doc['1'])
 conditions = [
@@ -347,7 +347,7 @@ conditions = [
     (doc['2'] == 3)]
 choices = ['alone', 'collab', 'diverse']
 y = np.select(conditions, choices, default='unknown')
-npz_channels = np.load(f"./data/channels_{type_of_data}.npz")
+npz_channels = np.load(f"./data/channels_{type_of_data}_pseudo-{pseudo}.npz")
 channels = []
 for array in list(npz_channels.files):
     channels.append(npz_channels[array])

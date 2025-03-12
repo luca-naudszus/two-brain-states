@@ -18,11 +18,15 @@ import pandas as pd
 import scipy as sp
 #---
 import mne
+from riemannianKMeans import pseudodyads
 
 # ------------------------------------------------------------
 # Set variables
 path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data"
 #path = "./data"
+
+pseudo_dyads = True # Create pseudo dyads
+session_wise = False
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
 upsampling_freq = 5
@@ -95,7 +99,7 @@ def add_durations(targetID, session_n, in_epoch, duration_epoch, true_duration):
 # ------------------------------------------------------------
 # Load data
 inpath = Path(path, "preprocesseddata")
-dyads = pd.read_csv(Path(path, "dyadList.csv")) # list of true dyads
+true_dyads = pd.read_csv(Path(path, "dyadList.csv")) # list of true dyads
 cutpoints = pd.read_excel(Path(path, "cutpoints_videos.xlsx")) # list of activity durations from video data
 best_channels = pd.read_csv(Path(path, "fNIRS_chs_ROIproximal.csv"))
 
@@ -185,7 +189,7 @@ for key in key_list:
     targetID = int(key[4:7])
     session_n = int(key[-1])
 
-    partnerID, dyadID = get_partner_info(targetID, dyads)
+    partnerID, dyadID = get_partner_info(targetID, true_dyads)
     partner_key = f'sub-{partnerID}_session-{session_n}'
 
     # ------------------------------------------------------------
@@ -309,7 +313,11 @@ for df, num, denom in [(df_lengths, 'target_length', 'partner_length'),
 ts = defaultdict(lambda: defaultdict(list))
 doc, channels = defaultdict(list), defaultdict(list)
 key_list = set(data_dict.keys())
+dyads = pseudodyads(true_dyads) if pseudo_dyads else true_dyads
 for i, row in dyads.iterrows():
+    is_real = row['dyadType'] if pseudo_dyads else True
+    dyadID = row['dyadID']
+    group = row['group'] if pseudo_dyads else ("same" if dyadID < 2000 else "inter")
 
     for session in range(6):
         target_key, partner_key = (f"sub-{row[pID]}_session-{session + 1}" for pID in ['pID1', 'pID2'])
@@ -318,41 +326,49 @@ for i, row in dyads.iterrows():
             target_list = data_dict[target_key]['interpolation']
             target_channels = ['target ' + channel for channel in data_dict[target_key]['channels']]
             ts_target_temp, ts_partner_temp, ts_two_temp, ts_four_temp = [], [], [], []
-            
+
             for activity in range(4):
-                target_ts = get_and_zscore(target_list, activity)
-                ### 1a target, one brain data (two blocks: HbO + HbR), channel-wise z-scored
-                ts["one_brain"]["channel-wise"].append(target_ts)
-                doc["one_brain"].extend([[row['pID1'], session, activity]])
-                channels["one_brain"].append(target_channels)
-                ts_target_temp.append(target_ts)
+                target_ts = get_and_zscore(target_list, activity).astype(np.float32)
                 
+                ### 1a target, one brain data (two blocks: HbO + HbR), channel-wise z-scored
+                if is_real:
+                    ts["one_brain"]["channel-wise"].append(target_ts)
+                    doc["one_brain"].extend([[row['pID1'], session, activity]])
+                    channels["one_brain"].append(target_channels)
+                ts_target_temp.append(target_ts)
+
                 if partner_key in key_list: 
                     
                     partner_channels = ['partner ' + channel for channel in data_dict[partner_key]['channels']]
-                    partner_ts = get_and_zscore(data_dict[partner_key]['interpolation'], activity)
+                    partner_ts = get_and_zscore(data_dict[partner_key]['interpolation'], activity).astype(np.float32)
 
                     ### 1a partner, one brain data (two blocks: HbO + HbR), channel-wise z-scored
-                    ts["one_brain"]["channel-wise"].append(partner_ts)
-                    doc["one_brain"].extend([[row['pID2'], session, activity]])
-                    channels["one_brain"].append(partner_channels)
+                    if is_real:
+                        ts["one_brain"]["channel-wise"].append(partner_ts)
+                        doc["one_brain"].extend([[row['pID2'], session, activity]])
+                        channels["one_brain"].append(partner_channels)
                     ts_partner_temp.append(partner_ts)
+
+
+                    if not is_real: 
+                        n_samples = min(target_ts.shape[1], partner_ts.shape[1])
+                        target_ts, partner_ts = target_ts[:,:n_samples], partner_ts[:,:n_samples]
                     
                     ### 2a, two blocks: target + partner, channel-wise z-scored
-                    ts_two = np.concatenate((target_ts, partner_ts), axis = 0)         
+                    ts_two = np.concatenate((target_ts, partner_ts), axis=0).astype(np.float32)     
                     ts["two_blocks"]["channel-wise"].append(ts_two)
-                    doc["two_blocks"].extend([[row['dyadID'], session, activity]])
+                    doc["two_blocks"].extend([[dyadID, is_real, group, session, activity]])
                     channels["two_blocks"].append(target_channels + partner_channels)
                     ts_two_temp.append(ts_two)
-                    
+
                     ### 3a, four blocks: target HbO, partner HbO, target HbR, partner HbR
                     lentchs, lenpchs = int(len(target_channels)), int(len(partner_channels))
                     ts_four = np.concatenate((target_ts[:int(lentchs/2)], 
                                               partner_ts[:int(lenpchs/2)], 
                                               target_ts[int(lentchs/2):lentchs], 
-                                              partner_ts[int(lenpchs/2):lenpchs]), axis=0)
+                                              partner_ts[int(lenpchs/2):lenpchs]), axis=0).astype(np.float32)
                     ts["four_blocks"]["channel-wise"].append(ts_four)
-                    doc["four_blocks"].extend([[row['dyadID'], session, activity]])
+                    doc["four_blocks"].extend([[dyadID, is_real, group, session, activity]])
                     channels["four_blocks"].append(np.concatenate((target_channels[:int(lentchs/2)], 
                                                                partner_channels[:int(lenpchs/2)], 
                                                                target_channels[int(lentchs/2):lentchs], 
@@ -361,31 +377,36 @@ for i, row in dyads.iterrows():
             
             ### 1b target, one brain data as above, channel- and session-wise z-scored
             ## session-wise z-scoring
-            ts_target_split = zscore_and_split(ts_target_temp)
+            if session_wise: 
+                ts_target_split = zscore_and_split(ts_target_temp)
 
-            ## append to list
-            for activity in range(4):
-                ts["one_brain"]["session-wise"].append(ts_target_split[activity])
-            if partner_key in key_list: 
-                ### session-wise z-scoring
-                ts_partner_split, ts_two_split, ts_four_split = map(zscore_and_split, 
+                ## append to list
+                if is_real:
+                    for activity in range(4):
+                        ts["one_brain"]["session-wise"].append(ts_target_split[activity])
+
+                if partner_key in key_list: 
+                    ### session-wise z-scoring
+                    ts_partner_split, ts_two_split, ts_four_split = map(zscore_and_split, 
                                                     [ts_partner_temp, ts_two_temp, ts_four_temp])
                 
-                ## append to list
-                for activity in range(4):
+                    ## append to list
+                    for activity in range(4):
                     
-                    ### 1b partner, one brain data as above, channel- and session-wise z-scored
-                    ts["one_brain"]["session-wise"].append(ts_partner_split[activity])
-                    ### 2b, two blocks as above, channel- and session-wise z-scored
-                    ts["two_blocks"]["session-wise"].append(ts_two_split[activity])        
-                    ### 3b, four blocks as above, channel- and session-wise z-scored
-                    ts["four_blocks"]["session-wise"].append(ts_four_split[activity])
+                        ### 1b partner, one brain data as above, channel- and session-wise z-scored
+                        if is_real: 
+                            ts["one_brain"]["session-wise"].append(ts_partner_split[activity].astype(np.float32))
+                    
+                        ### 2b, two blocks as above, channel- and session-wise z-scored
+                        ts["two_blocks"]["session-wise"].append(ts_two_split[activity].astype(np.float32))        
+                        ### 3b, four blocks as above, channel- and session-wise z-scored
+                        ts["four_blocks"]["session-wise"].append(ts_four_split[activity].astype(np.float32))
 
 # ------------------------------------------------------------
 # Save data
-
+pseudo = "true" if pseudo_dyads else "false"
 for key in list(ts.keys()):
-    np.savez(Path(path, f"ts_{key}_fb{which_freq_bands}"), *ts[key]['channel-wise'])
-    np.savez(Path(path, f"ts_{key}_session_fb{which_freq_bands}"), *ts[key]['session-wise'])
-    pd.DataFrame(doc[key]).to_csv(Path(path, f"doc_{key}.csv"))
-    np.savez(Path(path, f"channels_{key}"), *channels[key])
+    np.savez(Path(path, f"ts_{key}_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['channel-wise'])
+    np.savez(Path(path, f"ts_{key}_session_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['session-wise'])
+    pd.DataFrame(doc[key]).to_csv(Path(path, f"doc_{key}_pseudo-{pseudo}.csv"))
+    np.savez(Path(path, f"channels_{key}_pseudo-{pseudo}"), *channels[key])
