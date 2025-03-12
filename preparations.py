@@ -26,7 +26,7 @@ path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational
 #path = "./data"
 
 pseudo_dyads = True # Create pseudo dyads
-session_wise = False
+session_wise = False # Might lead to memory issues when creating pseudo dyads
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
 upsampling_freq = 5

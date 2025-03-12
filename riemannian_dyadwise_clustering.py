@@ -42,14 +42,18 @@ outpath = 'results'
 # Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "four_blocks"
+type_of_data = "one_brain"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
 
-# do we want to generate pseudo dyads?
-pseudo_dyads = False
+# do we want to use pseudo dyads?
+pseudo_dyads = True 
+# True has excessive memory usage and 
+# cannot run on a standard machine at the moment. 
+# True is invalid for type_of_data == "one_brain", 
+# pseudo dyads are created later in that case. 
 
 # do we want to use data with missing channels?
 use_missing_channels = False
@@ -332,6 +336,20 @@ def get_counts(strings):
 # ------------------------------------------------------------
 ### Load data. Do not change this section. 
 
+# checks
+if type_of_data == "one_brain" and pseudo_dyads: 
+    pseudo_dyads = False
+    raise Warning("Pseudo dyads are turned off. For one brain data, pseudo dyads are created in a later step.")
+if exp_block_size not in {4, 8}:
+    raise ValueError('Unknown expected block size. Choose from 4, 8.')
+if clustering not in {'full', 'id-wise', 'session-wise'}:
+    raise ValueError(f"Unknown clustering type: {clustering}. Choose from 'full', 'id-wise', or 'session-wise'.")
+if demean:
+    if demeaner_method not in {'log-euclidean', 'tangent', 'projection', 'airm'}:
+        raise ValueError("Invalid demeaner method. Choose from 'log-euclidean', 'tangent', 'projection', 'airm'")
+    if demeaner_var not in {'id-wise', 'session-wise'}:
+        raise ValueError("Invalid demeaner variable. Choose 'id-wise' or 'session-wise'")
+
 # Load the dataset
 pseudo = "true" if pseudo_dyads else "false"
 npz_data = np.load(f"./data/ts_{type_of_data}_fb-{which_freq_bands}_pseudo-{pseudo}.npz")
@@ -373,17 +391,7 @@ else:
     exp_n_channels = 16
     exp_n_blocks = 4 if exp_block_size == 4 else 2
 sum_blocks = exp_block_size == 8
-if exp_block_size not in {4, 8}:
-    raise ValueError('Unknown expected block size. Choose from 4, 8.')
 
-# checks
-if clustering not in {'full', 'id-wise', 'session-wise'}:
-    raise ValueError(f"Unknown clustering type: {clustering}. Choose from 'full', 'id-wise', or 'session-wise'.")
-if demean:
-    if demeaner_method not in {'log-euclidean', 'tangent', 'projection', 'airm'}:
-        raise ValueError("Invalid demeaner method. Choose from 'log-euclidean', 'tangent', 'projection', 'airm'")
-    if demeaner_var not in {'id-wise', 'session-wise'}:
-        raise ValueError("Invalid demeaner variable. Choose 'id-wise' or 'session-wise'")
 
 # make dict
 freq_bands = [[0.015, 0.4], [0.1, 0.2], [0.03, 0.1], [0.02, 0.03]]
