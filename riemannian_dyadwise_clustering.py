@@ -42,7 +42,7 @@ outpath = 'results'
 # Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "one_brain"
+type_of_data = "four_blocks"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 8
@@ -358,11 +358,11 @@ for array in list(npz_data.files):
     X.append(npz_data[array])
 doc = pd.read_csv(f"./data/doc_{type_of_data}_pseudo-{pseudo}.csv", index_col = 0)
 ids = np.array(doc['0'])
-sessions = np.array(doc['1'])
+sessions = np.array(doc['3'])
 conditions = [
-    (doc['2'] == 0),
-    (doc['2'] == 1) | (doc['2'] == 2),
-    (doc['2'] == 3)]
+    (doc['4'] == 0),
+    (doc['4'] == 1) | (doc['4'] == 2),
+    (doc['4'] == 3)]
 choices = ['alone', 'collab', 'diverse']
 y = np.select(conditions, choices, default='unknown')
 npz_channels = np.load(f"./data/channels_{type_of_data}_pseudo-{pseudo}.npz")

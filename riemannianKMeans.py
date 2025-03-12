@@ -7,6 +7,7 @@ from joblib import Parallel, delayed
 from itertools import combinations
 import numpy as np
 import pandas as pd
+import random
 from scipy.linalg import block_diag
 #---
 from pyriemann.clustering import Kmeans
@@ -624,12 +625,15 @@ def project_to_common_space(matrices, target_dim):
     
     return np.array(projected_matrices)
 
-def pseudodyads(true_dyads):
+def pseudodyads(true_dyads, sample=0.1):
     ids = true_dyads.pID1.tolist() + true_dyads.pID2.tolist()
     permutations = list(combinations(ids, 2))
     pseudo_dyads = []
     for [pID1, pID2] in permutations: 
         if pID1 == pID2: 
+            continue
+        if pID1 > 300 and pID2 > 300: 
+            # Exclude same-generational old pairs
             continue
         if pID1 in true_dyads.pID1.values and true_dyads.pID2.values[
                 true_dyads.pID1 == pID1] == pID2: 
@@ -648,8 +652,22 @@ def pseudodyads(true_dyads):
         pseudo_dyads.append(
             [pID1, pID2, pair, dyadID, group]
         )
+
     pseudo_dyads = pd.DataFrame(pseudo_dyads,
                                 columns = [
                                     "pID1", "pID2", "dyadType", "dyadID", "group"
                                 ])
+    
+    # Use a stratified sample
+    if sample is not None:
+        indices_real = list(np.where(pseudo_dyads.dyadType)[0])
+        indices_random = []
+        for target in list(set(pseudo_dyads.pID1.tolist())):
+            indices_pseudo = list(np.where(
+                (pseudo_dyads.dyadType == False) & 
+                (pseudo_dyads.pID1 == target)
+            )[0])
+            indices_random.append(random.sample(indices_pseudo, int(len(indices_pseudo) * sample)))
+        pseudo_dyads = pseudo_dyads.iloc[indices_real + np.concatenate(indices_random)]
+    
     return pseudo_dyads

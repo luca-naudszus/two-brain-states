@@ -29,6 +29,8 @@ results_table = pd.read_csv(fn)
 # Calculate coverage
 coverage_table = []
 if type_of_data == "one_brain": 
+    #TODO: Use percentage and not count of common brain states
+    #TODO: Make all different kinds of common brain states and reduce in R script
     true_dyads = pd.read_csv(Path("data") / "dyadList.csv")
     dyads = pseudodyads(true_dyads) 
     for i, row in dyads.iterrows(): 
