@@ -7,6 +7,7 @@
 import os
 from pathlib import Path
 #---
+from itertools import combinations_with_replacement
 import numpy as np
 import pandas as pd
 #---
@@ -29,8 +30,6 @@ results_table = pd.read_csv(fn)
 # Calculate coverage
 coverage_table = []
 if type_of_data == "one_brain": 
-    #TODO: Use percentage and not count of common brain states
-    #TODO: Make all different kinds of common brain states and reduce in R script
     true_dyads = pd.read_csv(Path("data") / "dyadList.csv")
     dyads = pseudodyads(true_dyads) 
     for i, row in dyads.iterrows(): 
@@ -46,11 +45,11 @@ if type_of_data == "one_brain":
                             (results_table.sessions == session) & 
                             (results_table.ids == partnerID)]
                 if len(target) != 0 and len(partner) != 0: 
-                    clusters = np.stack((target, partner), axis=1)
-                    for cluster in np.unique(clusters):
-                        n = np.sum((clusters[:,0] == clusters[:,1]) & (clusters[:,0] == cluster))
+                    classes = np.stack((target, partner), axis=1)
+                    for class_combination in combinations_with_replacement(np.unique(classes), 2):
+                        n = np.sum(classes[:,0] == class_combination[0] & (classes[:,1] == class_combination[1])) / len(target)
                         coverage_table.append(
-                        [n, dyadID, dyadType, group, session, activity, cluster]
+                        [n, dyadID, dyadType, group, session, activity, str(class_combination[0]) + "_" + str(class_combination[1])]
                         )
 else: 
     for id in sorted(set(results_table.ids)):

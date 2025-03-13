@@ -25,7 +25,7 @@ from riemannianKMeans import pseudodyads
 path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data"
 #path = "./data"
 
-pseudo_dyads = True # Create pseudo dyads
+pseudo_dyads = False # Create pseudo dyads
 session_wise = False # Might lead to memory issues when creating pseudo dyads
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
@@ -405,8 +405,15 @@ for i, row in dyads.iterrows():
 # ------------------------------------------------------------
 # Save data
 pseudo = "true" if pseudo_dyads else "false"
+
 for key in list(ts.keys()):
     np.savez(Path(path, f"ts_{key}_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['channel-wise'])
     np.savez(Path(path, f"ts_{key}_session_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['session-wise'])
-    pd.DataFrame(doc[key]).to_csv(Path(path, f"doc_{key}_pseudo-{pseudo}.csv"))
+    columns = [
+        "id", "session", "activity"] if key == "one_brain" else [
+        "id", "isReal", "group", "session", "activity"
+    ]
+    pd.DataFrame(doc[key], 
+                 columns=columns).to_csv(
+                     Path(path, f"doc_{key}_pseudo-{pseudo}.csv"))
     np.savez(Path(path, f"channels_{key}_pseudo-{pseudo}"), *channels[key])

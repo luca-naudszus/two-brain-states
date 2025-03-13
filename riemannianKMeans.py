@@ -668,6 +668,6 @@ def pseudodyads(true_dyads, sample=0.1):
                 (pseudo_dyads.pID1 == target)
             )[0])
             indices_random.append(random.sample(indices_pseudo, int(len(indices_pseudo) * sample)))
-        pseudo_dyads = pseudo_dyads.iloc[indices_real + np.concatenate(indices_random)]
+        pseudo_dyads = pseudo_dyads.iloc[indices_real + list(np.concatenate(indices_random))]
     
     return pseudo_dyads

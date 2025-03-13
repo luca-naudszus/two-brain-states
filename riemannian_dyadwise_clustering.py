@@ -49,7 +49,7 @@ exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
 
 # do we want to use pseudo dyads?
-pseudo_dyads = True 
+pseudo_dyads = False
 # True has excessive memory usage and 
 # cannot run on a standard machine at the moment. 
 # True is invalid for type_of_data == "one_brain", 
@@ -86,7 +86,7 @@ plot = True
 # hyperparameters (overridden in case of grid search)
 shrinkage = 0.1 # shrinkage value
 metrics = 'rbf' # kernel function
-n_clusters = 3 # number of clusters for k-means
+n_clusters = 8 # number of clusters for k-means
 
 # parameter space for grid search
 params_shrinkage = [0] #, 0.01, 0.1]
@@ -95,7 +95,7 @@ params_n_clusters = range(3, 4) #, 10)
 
 # information on data
 upsampling_freq = 5 # frequency to which the data have been upsampled
-window_length = 30 # length of windows in s
+window_length = 15 # length of windows in s
 step_length = 1 # steps 
 
 # define global settings
@@ -339,7 +339,7 @@ def get_counts(strings):
 # checks
 if type_of_data == "one_brain" and pseudo_dyads: 
     pseudo_dyads = False
-    raise Warning("Pseudo dyads are turned off. For one brain data, pseudo dyads are created in a later step.")
+    raise ValueError("Set pseudo_dyads = False for one brain data. For one brain data, pseudo dyads are created in a later step.")
 if exp_block_size not in {4, 8}:
     raise ValueError('Unknown expected block size. Choose from 4, 8.')
 if clustering not in {'full', 'id-wise', 'session-wise'}:
@@ -357,12 +357,12 @@ X = []
 for array in list(npz_data.files):
     X.append(npz_data[array])
 doc = pd.read_csv(f"./data/doc_{type_of_data}_pseudo-{pseudo}.csv", index_col = 0)
-ids = np.array(doc['0'])
-sessions = np.array(doc['3'])
+ids = np.array(doc['id'])
+sessions = np.array(doc['session'])
 conditions = [
-    (doc['4'] == 0),
-    (doc['4'] == 1) | (doc['4'] == 2),
-    (doc['4'] == 3)]
+    (doc['activity'] == 0),
+    (doc['activity'] == 1) | (doc['activity'] == 2),
+    (doc['activity'] == 3)]
 choices = ['alone', 'collab', 'diverse']
 y = np.select(conditions, choices, default='unknown')
 npz_channels = np.load(f"./data/channels_{type_of_data}_pseudo-{pseudo}.npz")
