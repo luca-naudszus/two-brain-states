@@ -42,7 +42,7 @@ outpath = 'results'
 # Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "four_blocks"
+type_of_data = "one_brain"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 8
@@ -422,7 +422,7 @@ else:
     pipeline_metadata.update({
         "shrinkage": shrinkage,
         "metrics": metrics,
-        "n_clusters": list(n_clusters),
+        "n_clusters": n_clusters,
     })
 
 # ------------------------------------------------------------
@@ -494,6 +494,11 @@ if not grid_search:
 ### Run grid search. Do not change this section. 
 
 if grid_search:
+    # ATTENTION: This script currently does not use the hybrid property of HybridBlocks. 
+    # All hyperparameters are set to the same value in each iteration for all blocks. 
+    # The commented-out lines below allow for separate shrinkage parameters and kernels per block.  
+    # This leads to much longer runtimes and is therefore avoided here. 
+
     # Compute grid search parameters from inputs
     #comb_shrinkage = product(params_shrinkage, repeat = exp_n_blocks)
     #params_shrinkage_combinations = [list(x) for x in comb_shrinkage]

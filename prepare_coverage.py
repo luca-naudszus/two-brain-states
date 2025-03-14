@@ -7,7 +7,7 @@
 import os
 from pathlib import Path
 #---
-from itertools import combinations_with_replacement
+from itertools import product
 import numpy as np
 import pandas as pd
 #---
@@ -23,7 +23,7 @@ type_of_data = "one_brain"
 # ------------------------------------------------------------
 # Load Data
 path = Path('results')
-fn = list(path.glob(f"results_table_{type_of_data}_*"))[-1]
+fn = sorted(list(path.glob(f"results_table_{type_of_data}_*")))[-1]
 results_table = pd.read_csv(fn)
 
 # ------------------------------------------------------------
@@ -46,7 +46,7 @@ if type_of_data == "one_brain":
                             (results_table.ids == partnerID)]
                 if len(target) != 0 and len(partner) != 0: 
                     classes = np.stack((target, partner), axis=1)
-                    for class_combination in combinations_with_replacement(np.unique(classes), 2):
+                    for class_combination in product(np.unique(classes), repeat=2):
                         n = np.sum(classes[:,0] == class_combination[0] & (classes[:,1] == class_combination[1])) / len(target)
                         coverage_table.append(
                         [n, dyadID, dyadType, group, session, activity, str(class_combination[0]) + "_" + str(class_combination[1])]

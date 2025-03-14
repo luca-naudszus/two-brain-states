@@ -647,8 +647,10 @@ def pseudodyads(true_dyads, sample=0.1):
             group = "same" if dyadID < 2000 else "inter"
         else: 
             pair = False
-            dyadID = str(pID1) + "_" + str(pID2)
-            group = "none"
+            pIDsmaller = pID1 if pID1 < pID2 else pID2
+            pIDgreater = pID2 if pID1 < pID2 else pID1
+            dyadID = str(pIDsmaller) + "_" + str(pIDgreater)
+            group = "same" if (pIDsmaller < 300) and (pIDgreater < 300) else "inter"
         pseudo_dyads.append(
             [pID1, pID2, pair, dyadID, group]
         )
