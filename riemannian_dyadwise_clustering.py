@@ -414,15 +414,15 @@ pipeline_metadata = {
 
 if grid_search:
     pipeline_metadata.update({
-        "shrinkage": params_shrinkage,
-        "metrics": params_kernel,
-        "n_clusters": params_n_clusters,
+        "shrinkage": list(params_shrinkage),
+        "metrics": list(params_kernel),
+        "n_clusters": list(params_n_clusters),
     })
 else:
     pipeline_metadata.update({
         "shrinkage": shrinkage,
         "metrics": metrics,
-        "n_clusters": n_clusters,
+        "n_clusters": list(n_clusters),
     })
 
 # ------------------------------------------------------------

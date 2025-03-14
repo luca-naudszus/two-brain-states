@@ -8,6 +8,7 @@
 # ------------------------------------------------------------
 # Import packages
 from datetime import datetime, timedelta
+import logging
 from pathlib import Path
 import os
 import re
@@ -106,7 +107,7 @@ best_channels = pd.read_csv(Path(path, "fNIRS_chs_ROIproximal.csv"))
 expected_rois = {'l_ifg', 'l_tpj', 'r_ifg', 'r_tpj'}
 
 ### Load single fif files
-all_dict, roi_dict, channel_dict, error_log = {}, {}, {}, []
+all_dict, roi_dict, channel_dict = {}, {}, {}
 for file in os.listdir(inpath):
     if file.endswith(".fif"):
         
@@ -114,7 +115,7 @@ for file in os.listdir(inpath):
         #TODO: deal with broken recordings, n = 6,
         # this would give six more individual session data and four more dyad session data
         if re.match(r"^.+_.{1}_pre\.fif$", file):
-            error_log.append((file[:-8], 'recording is broken'))
+            logging.warning(f'{file[:-8]}: recording is broken')
             continue
 
         # Get path and info
@@ -138,15 +139,15 @@ for file in os.listdir(inpath):
         # Check whether there are enough onsets recorded
         if len(data.annotations) < 4:
             # we need to exclude these data
-            error_log.append((file[:-8], 'no onsets'))
+            logging.warning(f'{file[:-8]}: no onsets')
             continue
 
         # Define durations of epochs
         events, event_dict = mne.events_from_annotations(data, verbose=verbosity)
         for in_activity in range(3):
             data.annotations.duration[
-                in_activity] = (events[in_activity + 1][0] - events[in_activity][0] - 1)/5
-        data.annotations.duration[3] = (data[data.ch_names[0]][0].shape[1] - events[3][0] - 1)/5
+                in_activity] = (events[in_activity + 1][0] - events[in_activity][0] - 1)/upsampling_freq
+        data.annotations.duration[3] = (data[data.ch_names[0]][0].shape[1] - events[3][0] - 1)/upsampling_freq
 
         # Epoch data
         epoch_list = []
@@ -165,7 +166,8 @@ for file in os.listdir(inpath):
                 epoch.filter(l_freq = freq_bands[which_freq_bands][0], 
                          h_freq = freq_bands[which_freq_bands][1], 
                          verbose=verbosity)
-            assert len(epoch.drop_log[0]) == 0, 'Dropped all epochs here'
+            if len(epoch.drop_log[0]) == 0: 
+                logging.warning(f'{file[:-8]}: Dropped all epochs here')
             epoch_list.append(epoch)
             i += 1
 
@@ -212,22 +214,20 @@ for key in key_list:
             
             ### Check if data is missing
             if check_for_missing(partner_ts) or check_for_missing(target_ts): 
-                error_log.extend([
-                    (f'sub-{targetID}_session-{session_n}', 'nans or too many zeros in target or partner data'),
-                    (partner_key, 'nans or too many zeros in target or partner data')
-                    ])
+                logging.warning(f'sub-{targetID}_session-{session_n}: nans or too many zeros in target or partner data')
                 valid_data = False
                 break
 
             ### save original lengths for later comparison
+            len_target, len_partner = target_ts.shape[1], partner_ts.shape[1]
             original_lengths.append(
-                [targetID, partnerID, session_n, in_epoch, np.shape(target_ts)[1], np.shape(partner_ts)[1]])
+                [targetID, partnerID, session_n, in_epoch, len_target, len_partner])
             
             # ------------------------------------------------------------
             # Interpolate timeseries
             
             ### Find out which duration is longer, this will be the duration at which we aim.
-            len_target, len_partner = target_ts.shape[1], partner_ts.shape[1]
+            
             len_interp = max(len_target, len_partner)
 
             ### Interpolate timeseries with shorter duration (unless both have equal length)
@@ -258,7 +258,7 @@ for key in key_list:
             partner_list.append(partner_interp)
 
         # ------------------------------------------------------------
-        # remove partner from key_list because they have been interpolated
+        # Partner has been processed. 
         preprocessed_keys.add(partner_key)
 
         # ------------------------------------------------------------
@@ -272,9 +272,8 @@ for key in key_list:
     # Compare recorded duration with true duration to assess which time has actually passed (see above). 
     # This enables us to determine the end of the activity and dismiss the recording after that. 
     else: 
-        target_list = []
-        duration_list = []
-        true_duration_list = []
+        logging.warning(f'sub-{targetID}_session-{session_n}: partner data missing')
+        target_list, duration_list, true_duration_list = [], [], []
         
         for in_epoch in range(0, len(target)):
             target_interp = target[in_epoch].get_data(copy = False, verbose=verbosity)[0]
@@ -295,7 +294,7 @@ for key in key_list:
         # ------------------------------------------------------------
         # Update dictionaries
         data_dict = set_data_dict(data_dict, key, target_list, duration_list, true_duration_list, channel_dict)
-        error_log.append((f'sub-{targetID}_session-{session_n}', 'partner data missing'))
+        
 
 # ------------------------------------------------------------
 # Make data frame containing the original lengths, and true and interpolated durations of target and partner time series

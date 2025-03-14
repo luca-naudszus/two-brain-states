@@ -626,7 +626,7 @@ def project_to_common_space(matrices, target_dim):
     return np.array(projected_matrices)
 
 def pseudodyads(true_dyads, sample=0.1):
-    ids = true_dyads.pID1.tolist() + true_dyads.pID2.tolist()
+    ids = pd.concat([true_dyads.pID1, true_dyads.pID2]).unique()
     permutations = list(combinations(ids, 2))
     pseudo_dyads = []
     for [pID1, pID2] in permutations: 
