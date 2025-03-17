@@ -363,7 +363,7 @@ conditions = [
     (doc['activity'] == 0),
     (doc['activity'] == 1) | (doc['activity'] == 2),
     (doc['activity'] == 3)]
-choices = ['alone', 'collab', 'diverse']
+choices = ['Alone', 'Together', 'diverse']
 y = np.select(conditions, choices, default='unknown')
 npz_channels = np.load(f"./data/channels_{type_of_data}_pseudo-{pseudo}.npz")
 channels = []

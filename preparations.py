@@ -26,7 +26,7 @@ from riemannianKMeans import pseudodyads
 path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data"
 #path = "./data"
 
-pseudo_dyads = False # Create pseudo dyads
+pseudo_dyads = True # Create pseudo dyads
 session_wise = False # Might lead to memory issues when creating pseudo dyads
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
@@ -166,7 +166,7 @@ for file in os.listdir(inpath):
                 epoch.filter(l_freq = freq_bands[which_freq_bands][0], 
                          h_freq = freq_bands[which_freq_bands][1], 
                          verbose=verbosity)
-            if len(epoch.drop_log[0]) == 0: 
+            if len(epoch.drop_log[0]) != 0: 
                 logging.warning(f'{file[:-8]}: Dropped all epochs here')
             epoch_list.append(epoch)
             i += 1

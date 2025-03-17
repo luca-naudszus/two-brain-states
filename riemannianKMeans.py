@@ -639,18 +639,18 @@ def pseudodyads(true_dyads, sample=0.1):
                 true_dyads.pID1 == pID1] == pID2: 
             pair = True
             dyadID = true_dyads.dyadID.values[true_dyads.pID1 == pID1][0]
-            group = "same" if dyadID < 2000 else "inter"
+            group = "Same gen" if dyadID < 2000 else "Intergen"
         elif pID1 in true_dyads.pID2.values and true_dyads.pID1.values[
                 true_dyads.pID2 == pID1] == pID2:
             pair = True
             dyadID = true_dyads.dyadID[true_dyads.pID2 == pID1][0]
-            group = "same" if dyadID < 2000 else "inter"
+            group = "Same gen" if dyadID < 2000 else "Intergen"
         else: 
             pair = False
             pIDsmaller = pID1 if pID1 < pID2 else pID2
             pIDgreater = pID2 if pID1 < pID2 else pID1
             dyadID = str(pIDsmaller) + "_" + str(pIDgreater)
-            group = "same" if (pIDsmaller < 300) and (pIDgreater < 300) else "inter"
+            group = "Same gen" if (pIDsmaller < 300) and (pIDgreater < 300) else "Intergen"
         pseudo_dyads.append(
             [pID1, pID2, pair, dyadID, group]
         )
