@@ -361,9 +361,10 @@ ids = np.array(doc['id'])
 sessions = np.array(doc['session'])
 conditions = [
     (doc['activity'] == 0),
-    (doc['activity'] == 1) | (doc['activity'] == 2),
+    (doc['activity'] == 1),
+    (doc['activity'] == 2),
     (doc['activity'] == 3)]
-choices = ['Alone', 'Together', 'diverse']
+choices = ['Alone', 'Together_1', 'Together_2', 'diverse']
 y = np.select(conditions, choices, default='unknown')
 npz_channels = np.load(f"./data/channels_{type_of_data}_pseudo-{pseudo}.npz")
 channels = []

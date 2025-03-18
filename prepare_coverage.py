@@ -48,24 +48,37 @@ if type_of_data == "one_brain":
                     classes = np.stack((target, partner), axis=1) + 1
                     for class_combination in product(np.unique(classes), repeat=2):
                         n = len(target)
-                        coverage = np.sum(classes[:,0] == class_combination[0] & (classes[:,1] == class_combination[1])) / n
+                        coverage = np.sum(classes[:,0] == class_combination[0] & (classes[:,1] == class_combination[1])) 
                         coverage_table.append(
                         [coverage, dyadID, dyadType, group, session + 1, activity, str(class_combination[0]) + "_" + str(class_combination[1]), n]
                         )
-                for class_t in np.unique(target):
-                    n_t = len(target)
-                    cov_ct = np.sum(target == class_t) / n_t
-                    group_t = "young" if targetID < 300 else "old"
-                    coverage_table_single.append(
-                        [cov_ct, targetID, group_t, session + 1, activity, class_t + 1, n_t]
-                    )
-                for class_p in np.unique(partner):
-                    n_p = len(partner)
-                    cov_cp = np.sum(partner == class_p) / n_p
-                    group_p = "young" if partnerID < 300 else "old"
-                    coverage_table_single.append(
-                        [cov_cp, partnerID, group_p, session + 1, activity, class_p + 1, n_p]
-                    )
+        if dyadType: 
+            for session in range(6):
+                for activity in sorted(set(results_table.activities)):
+                    target = results_table.classes[
+                                (results_table.activities == activity) & 
+                                (results_table.sessions == session) & 
+                                (results_table.ids == targetID)]
+                    partner = results_table.classes[
+                                (results_table.activities == activity) & 
+                                (results_table.sessions == session) & 
+                                (results_table.ids == partnerID)]
+                    for class_t in np.unique(target):
+                        n_t = len(target)
+                        if n_t != 0:
+                            cov_ct = np.sum(target == class_t) 
+                            group_t = "young" if targetID < 300 else "old"
+                            coverage_table_single.append(
+                                [cov_ct, targetID, group_t, session + 1, activity, class_t + 1, n_t]
+                            )
+                    for class_p in np.unique(partner):
+                        n_p = len(partner)
+                        if n_p != 0:
+                            cov_cp = np.sum(partner == class_p)
+                            group_p = "young" if partnerID < 300 else "old"
+                            coverage_table_single.append(
+                                [cov_cp, partnerID, group_p, session + 1, activity, class_p + 1, n_p]
+                            )
 
 else: 
     for id in sorted(set(results_table.ids)):
