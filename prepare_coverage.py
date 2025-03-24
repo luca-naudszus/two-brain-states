@@ -82,6 +82,7 @@ if type_of_data == "one_brain":
 
 else: 
     for id in sorted(set(results_table.ids)):
+        #TODO: Make pseudo dyads have a group. 
         if (len(str(id)) == 4): 
             dyadType = True
             if str(id).startswith("1"): 

@@ -17,11 +17,13 @@ import pandas as pd
 #---
 from pyriemann.utils.mean import mean_riemann
 from pyriemann.utils.tangentspace import tangent_space
+from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import adjusted_rand_score
 #---
 from riemannianKMeans import (
     Demeaner, 
+    FlattenTransformer, 
     ListTimeSeriesWindowTransformer, 
     HybridBlocks, 
     RiemannianKMeans, 
@@ -47,9 +49,14 @@ type_of_data = "four_blocks"
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
+# For two-brain data, do we want to focus on the inter-brain part?
+interbrain = True # True takes only the inter-brain part, False takes the whole matrix. 
+# TODO: Adapt interbrain for two_blocks approach. 
+# TODO: Adapt interbrain for four_blocks with exp_block_size == 4. 
+# TODO: Solve LinAlg issues. 
 
 # do we want to use pseudo dyads?
-pseudo_dyads = True
+pseudo_dyads = False
 # True has excessive memory usage and 
 # cannot run on a standard machine at the moment. 
 # True is invalid for type_of_data == "one_brain", 
@@ -179,14 +186,36 @@ def pipeline(X, y, id, session,
         matrices.append(block_kernels.fit_transform(X_seg[in_channelgroup]))
 
     # ------------------------------------------------------------
+    ### Use either whole matrix or only inter-brain part
+    if interbrain: 
+        X_prepared = []
+        for in_channelgroup in range(len(matrices)): 
+            block_matrices = []
+            actual_block_sizes = blocks_seg[in_channelgroup][0]
+            block_size = np.cumsum(actual_block_sizes)
+            for matrix in matrices[in_channelgroup]: 
+                hbo = matrix[block_size[0]:block_size[1], 
+                                  0:block_size[0]]
+                hbr = matrix[block_size[2]:block_size[3], 
+                                  block_size[1]:block_size[2]]
+                block_matrix = np.block([
+                    [hbo, np.zeros((hbo.shape[0], hbr.shape[1]))],  
+                    [np.zeros((hbr.shape[0], hbo.shape[1])), hbr]   
+                ])
+                block_matrices.append(block_matrix)
+            X_prepared.append(block_matrices)
+    else: 
+        X_prepared = matrices
+
+    # ------------------------------------------------------------
     ### Project matrices into common space
     if use_missing_channels:
         print('Projecting matrices into common space')
         target_dim = np.min(np.unique(channels_tmp))
-        for in_channelgroup in range(len(matrices)):
-            if matrices[in_channelgroup][0].shape[0] != target_dim:
-                matrices[in_channelgroup] = project_to_common_space(matrices[in_channelgroup], target_dim)
-    X_common = np.concatenate(matrices)
+        for in_channelgroup in range(len(X_prepared)):
+            if X_prepared[in_channelgroup][0].shape[0] != target_dim:
+                X_prepared[in_channelgroup] = project_to_common_space(X_prepared[in_channelgroup], target_dim)
+    X_common = np.concatenate(X_prepared)
     activities_common = np.concatenate(activities_seg)
     sessions_common = np.concatenate(sessions_seg)
     ids_common = np.concatenate(ids_seg)
@@ -220,45 +249,80 @@ def pipeline(X, y, id, session,
         demeaner = Demeaner(groups=groups,
                         activate=demean,
                         method=demeaner_method)
-        matrices = demeaner.fit_transform(X_common)
+        final_matrices = demeaner.fit_transform(X_common)
     
     else:
-        matrices = X_common
+        final_matrices = X_common
 
     # ------------------------------------------------------------
     ### KMeans
-    kmeans = RiemannianKMeans(n_jobs=n_jobs,
+    if interbrain: 
+        flattener = FlattenTransformer()
+        flattened_matrices = flattener.fit_transform(final_matrices)
+        # TODO: This is a very bad temporary solution, where kmeans is not restricted to the manifold 
+        # on which the matrices live. 
+        kmeans = KMeans(n_clusters=n_clusters,
+                        n_init=n_init)
+        classes = kmeans.fit_predict(flattened_matrices)
+        cluster_means = kmeans.cluster_centers_ 
+    else: 
+        kmeans = RiemannianKMeans(n_jobs=n_jobs,
                               n_clusters=n_clusters,
                               n_init=n_init)
-    classes = kmeans.fit_predict(matrices)
-    cluster_means = kmeans.centroids()
-    clusters = [matrices[classes == i] for i in range(n_clusters)]
+        classes = kmeans.fit_predict(final_matrices)
+        cluster_means = kmeans.centroids()
+    clusters = [final_matrices[classes == i] for i in range(n_clusters)]
     
     # ------------------------------------------------------------
     ### Clustering performance evaluation
-    #sh_score_pipeline = riemannian_silhouette_score(matrices, classes)
-    sh_score_pipeline = np.nan
-    ch_score_pipeline = ch_score(matrices, classes)
-    riem_var_pipeline = [riemannian_variance(clusters[i], cluster_means[i]) for i in range(n_clusters)]
-    db_score_pipeline = riemannian_davies_bouldin(clusters, cluster_means)
-    gdr_pipeline = geodesic_distance_ratio(clusters, cluster_means)
-    print(f"Silhouette Score: {sh_score_pipeline}")
-    print(f"Calinski-Harabasz Score: {ch_score_pipeline}")
-    print(f"Riemannian Variance: {riem_var_pipeline}")
-    print(f"Davies-Bouldin-Index: {db_score_pipeline}")
-    print(f"Geodesic Distance Ratio: {gdr_pipeline}")
+    if not interbrain:
+    #sh_score_pipeline = riemannian_silhouette_score(final_matrices, classes)
+        sh_score_pipeline = np.nan
+        ch_score_pipeline = ch_score(final_matrices, classes)
+        riem_var_pipeline = [riemannian_variance(clusters[i], cluster_means[i]) for i in range(n_clusters)]
+        db_score_pipeline = riemannian_davies_bouldin(clusters, cluster_means)
+        gdr_pipeline = geodesic_distance_ratio(clusters, cluster_means)
+        print(f"Silhouette Score: {sh_score_pipeline}")
+        print(f"Calinski-Harabasz Score: {ch_score_pipeline}")
+        print(f"Riemannian Variance: {np.mean(riem_var_pipeline)}")
+        print(f"Davies-Bouldin-Index: {db_score_pipeline}")
+        print(f"Geodesic Distance Ratio: {gdr_pipeline}")
+    else: 
+        # TODO: Find out how to calculate these measures in the interbrain case. 
+        sh_score_pipeline = np.nan
+        ch_score_pipeline = np.nan
+        riem_var_pipeline = np.nan
+        db_score_pipeline = np.nan
+        gdr_pipeline = np.nan
 
     # # ------------------------------------------------------------
     ### Rand indices
     rand_score_id = adjusted_rand_score(classes, ids_common) if clustering == 'all' else np.nan
     rand_score_ses = adjusted_rand_score(classes, sessions_common) if clustering != 'session-wise' else np.nan
     rand_score_act = adjusted_rand_score(classes, activities_common)
+    # TODO: Investigate the line below. 
     #rand_score_chs = adjusted_rand_score(classes, channels_common)
 
     # ------------------------------------------------------------
     ### PCA 
-    mean_matrix = mean_riemann(matrices)
-    X_tangent = tangent_space(matrices, mean_matrix)
+    # TODO: For compatibility with plotting, all _common variables are altered in this step. 
+    # However, we want to output the unaltered versions, so change this. 
+    if interbrain: 
+        data_stacked, classes_stacked, channels_stacked, sessions_stacked, activities_stacked = [], [], [], [], []
+        for i, matrix in enumerate(final_matrices):
+            data_stacked.append(matrix)
+            classes_stacked.extend([classes[i]] * matrix.shape[0])  
+            channels_stacked.extend([channels_common[i]] * matrix.shape[0])  
+            sessions_stacked.extend([sessions_common[i]] * matrix.shape[0])  
+            activities_stacked.extend([activities_common[i]] * matrix.shape[0])  
+        X_tangent = np.vstack(data_stacked) # not an actual tangent space representation, just a name for compatibility
+        classes = np.array(classes_stacked) 
+        channels_common = np.array(channels_stacked)
+        sessions_common = np.array(sessions_stacked)
+        activities_common = np.array(activities_stacked)
+    else: 
+        mean_matrix = mean_riemann(final_matrices)
+        X_tangent = tangent_space(final_matrices, mean_matrix)
     pca = PCA(n_components=2)
     X_pca = pca.fit_transform(X_tangent)
 
@@ -306,7 +370,7 @@ def pipeline(X, y, id, session,
         plt.legend()
         plt.show()
     
-    results = [matrices, cluster_means, classes, activities_common, sessions_common, ids_common, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, len(sessions_tmp)]
+    results = [final_matrices, cluster_means, classes, activities_common, sessions_common, ids_common, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, len(sessions_tmp)]
     return results
 
 def get_counts(strings):
@@ -340,6 +404,8 @@ def get_counts(strings):
 if type_of_data == "one_brain" and pseudo_dyads: 
     pseudo_dyads = False
     raise ValueError("Set pseudo_dyads = False for one brain data. For one brain data, pseudo dyads are created in a later step.")
+if type_of_data != "four_blocks" or exp_block_size == 4 and interbrain:
+    raise ValueError("Inter-brain data is currently only implemented for type_of_data == 'four_blocks' and exp_block_size == 8.")
 if exp_block_size not in {4, 8}:
     raise ValueError('Unknown expected block size. Choose from 4, 8.')
 if clustering not in {'full', 'id-wise', 'session-wise'}:
@@ -592,6 +658,8 @@ if grid_search:
 # ------------------------------------------------------------
 ### Save results. Do not change this section. 
 print("saving results")
+if interbrain: 
+    type_of_data = "interbrain"
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 scores.to_csv(Path(outpath) / f"parameter_space_scores_{type_of_data}_{timestamp}.csv", index=False)
 if not grid_search: 

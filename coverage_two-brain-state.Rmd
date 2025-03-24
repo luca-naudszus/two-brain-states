@@ -57,12 +57,12 @@ str(coverage_table)
 
 ```{r plot1, echo=FALSE}
 ggplot(coverage_table, aes(x=session, y=coverage,
-                           color=interaction(activity, group))) +
+                           color=interaction(dyadType, group))) +
     # geom_boxplot(position=position_dodge(.9)) +
   geom_jitter(alpha = .7, shape = 21, size =.5, width = 0.1) +
   geom_smooth(method = "lm") +
-  scale_color_manual(values=c("pink", "lightblue", "red", "blue")) +
-  facet_grid(group~cluster)
+  scale_color_manual(values=c("pink", "red", "grey", "darkgrey", "lightblue", "blue")) +
+  facet_grid(activity+dyadType~cluster)
 
 ggsave("two-brain-state_byclusters.png", width = 7, height = 4, dpi = 400)
 ```
@@ -70,7 +70,7 @@ ggsave("two-brain-state_byclusters.png", width = 7, height = 4, dpi = 400)
 ## Data exploration by sessions
 
 ```{r plot2, echo=FALSE}
-ggplot(coverage_table, aes(x=cluster, y=n, color=activity)) +
+ggplot(coverage_table, aes(x=cluster, y=coverage, color=activity)) +
   geom_boxplot(position=position_dodge(.9)) +
   scale_color_manual(values=c("red", "blue")) + 
   facet_grid(group~session)
@@ -81,7 +81,7 @@ ggsave("two-brain-state_bysessions.png", width = 7, height = 4, dpi = 400)
 
 ```{r fit, message=FALSE}
 # define model
-model1a <- 'n ~ cluster*activity*group'
+model1a <- 'coverage ~ cluster*activity*group'
 
 # fit model
 fit1a = glm.nb(model1a, data = coverage_table)
@@ -108,31 +108,6 @@ for (j in 1:length(foo)) {
     patterns[[paste0("c", i, "_", foo[j])]] <- pattern
   }
 }
-contrast(emm1a, method = list("Cluster 1 Old" = patterns$c1_together_old - patterns$c1_alone_old, 
-                                          "Cluster 2 Old" = patterns$c2_together_old - patterns$c2_alone_old,
-                                          "Cluster 3 Old" = patterns$c3_together_old - patterns$c3_alone_old
-#                                          "Cluster 4 Old" = patterns$c4_together_old - patterns$c4_alone_old,
-#                                          "Cluster 5 Old" = patterns$c5_together_old - patterns$c5_alone_old,
-#                                          "Cluster 6 Old" = patterns$c6_together_old - patterns$c6_alone_old,
-#                                          "Cluster 7 Old" = patterns$c7_together_old - patterns$c7_alone_old,
-#                                          "Cluster 8 Old" = patterns$c8_together_old - patterns$c8_alone_old
-))
-contrast(emm1a, method = list("Cluster 1 young" = patterns$c1_together_young - patterns$c1_alone_young, 
-                                          "Cluster 2 young" = patterns$c2_together_young - patterns$c2_alone_young,
-                                          "Cluster 3 young" = patterns$c3_together_young - patterns$c3_alone_young
-#                                          "Cluster 4 young" = patterns$c4_together_young - patterns$c4_alone_young,
-#                                          "Cluster 5 young" = patterns$c5_together_young - patterns$c5_alone_young,
-#                                          "Cluster 6 young" = patterns$c6_together_young - patterns$c6_alone_young,
-#                                          "Cluster 7 young" = patterns$c7_together_young - patterns$c7_alone_young,
-#                                          "Cluster 8 young" = patterns$c8_together_young - patterns$c8_alone_young
-))
-contrast(emm1a, method = list("Cluster 1 Together" = patterns$c1_together_old - patterns$c1_together_young, 
-                              "Cluster 2 Together" = patterns$c2_together_old - patterns$c2_together_young, 
-                              "Cluster 3 Together" = patterns$c3_together_old - patterns$c3_together_young, 
-                              "Cluster 1 Alone" = patterns$c1_alone_old - patterns$c1_alone_young, 
-                              "Cluster 2 Alone" = patterns$c2_alone_old - patterns$c2_alone_young, 
-                              "Cluster 3 Alone" = patterns$c3_alone_old - patterns$c3_alone_young
-))
 
 # plot heat map
 breaks = c((min(df.emm1a$response) + 0.001), (max(df.emm1a$response)-0.001))

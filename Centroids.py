@@ -15,12 +15,12 @@ import numpy as np
 
 # ------------------------------------------------------------
 # Set path
-os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
+os.chdir('C://Users//SBS_T//Documents//Luca')
 
 # ------------------------------------------------------------
 # Set variables
-type_of_data = "one_brain"
-exp_block_size = 4
+type_of_data = "four_blocks"
+exp_block_size = 8
 if type_of_data == "one_brain":
     channels = ["LIFG", "LTPJ", "RIFG", "RTPJ"] 
 else: 
