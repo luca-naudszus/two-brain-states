@@ -1,0 +1,169 @@
+---
+title: "Coverage-single state"
+author: "Luca A. Naudszus"
+date: "2025-03-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load packages
+library(emmeans)
+library(lme4)
+library(MASS)
+library(tidyverse)
+library(viridis)
+
+
+
+theme_set(theme_light()+
+            theme(
+              plot.title = element_text(size=rel(1),face="bold"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.background = element_blank(),
+              axis.title = element_text(size=rel(1),face="bold"),
+              axis.text = element_text(size=rel(1),colour = 'black'),
+              strip.text = element_text(size=rel(1),colour = 'black', 
+                                        face = "bold"),
+              legend.text = element_text(size=rel(1)),
+              legend.title = element_text(size=rel(1),face="bold")))
+
+
+```
+
+## Load data
+
+```{r load_data}
+# load data
+fn = dir('results', 
+         pattern = paste("coverage_table_one_brain.csv", 
+                         sep = "_"))[1]
+coverage_table = read.csv(file.path('results', fn)) 
+coverage_table$activity[coverage_table$activity == "Together_1" | coverage_table$activity == "Together_2"] = "Together"
+coverage_table <- coverage_table %>%
+  mutate(cluster = factor(case_when(cluster == "1_1" ~ "1", 
+                                    cluster == "2_2" ~ "2",
+                                    cluster == "3_3" ~ "3", 
+                                    TRUE ~ "X")),
+         group = factor(group),
+         dyadType = factor(case_when(dyadType == "True" ~ "Real",
+                                     dyadType == "False" ~ "Pseudo")),
+         activity = factor(activity)) %>%
+  mutate(id = factor(id))
+str(coverage_table)
+```
+
+## Data exploration by clusters
+
+```{r plot1, echo=FALSE}
+ggplot(coverage_table, aes(x=session, y=coverage,
+                           color=interaction(dyadType, group))) +
+    # geom_boxplot(position=position_dodge(.9)) +
+  geom_jitter(alpha = .7, shape = 21, size =.5, width = 0.1)+
+  geom_smooth(method = "lm")+
+    scale_color_manual(values=c("pink", "red", "lightblue", "blue")) +
+  facet_grid(activity+dyadType~cluster)
+
+ggsave("shared-state-r_byclusters.png", width = 10, height = 7, dpi = 400)
+```
+
+## Data exploration by sessions
+
+
+
+## Fit model
+
+```{r fit, message=FALSE}
+# define model
+model1a <- 'coverage ~ cluster*activity*dyadType*group'
+
+# fit model
+fit1a = glm.nb(model1a, data = coverage_table)
+anova(fit1a)
+summary(fit1a)
+```
+
+## Contrast analysis
+
+```{r contrasts, message=FALSE}
+
+# Get all estimated means in data frame
+emm1a <- emmeans(fit1a, specs=~cluster*activity*dyadType*group, data=coverage_table, type="response") 
+df.emm1a <- emm1a %>% as_tibble()
+
+# Custom contrasts
+patterns <- list()
+groups <- levels(coverage_table$group)
+dyadTypes <- levels(coverage_table$dyadType)
+activities <- levels(coverage_table$activity)
+clusters <- levels(coverage_table$cluster)
+n_groups <- length(groups)
+n_dyadTypes <- length(dyadTypes)
+n_activities <- length(activities)
+n_clusters <- length(clusters)
+for (in_group in 1:n_groups) {
+  for (in_dyadType in 1:n_dyadTypes) {
+    for (in_activity in 1:n_activities) {
+      for (in_cluster in 1:n_clusters) {
+        pattern <- rep(0, n_groups*n_dyadTypes*n_activities*n_clusters)
+        index <- (in_group - 1) * n_dyadTypes * n_activities * n_clusters + 
+          (in_dyadType - 1) * n_activities * n_clusters +  
+          (in_activity - 1) * n_clusters + in_cluster
+        pattern[index] <- 1
+        patterns[[paste0("c-", clusters[in_cluster], "_task-", 
+                         activities[in_activity], "_d-", 
+                         dyadTypes[in_dyadType], "_g-", 
+                         groups[in_group])]] <- pattern
+      }
+    }
+  }
+}
+# Contrast pseudo vs. real
+contrast(emm1a, method = list("C1 Alone Intergen" = patterns$`c-1_task-Alone_d-Pseudo_g-Intergen` - patterns$`c-1_task-Alone_d-Real_g-Intergen`,
+                              "C1 Alone Same gen" = patterns$`c-1_task-Alone_d-Pseudo_g-Same gen` - patterns$`c-1_task-Alone_d-Real_g-Same gen`,
+                              "C1 Together Intergen" = patterns$`c-1_task-Together_d-Pseudo_g-Intergen` - patterns$`c-1_task-Together_d-Real_g-Intergen`,
+                              "C1 Together Same gen" = patterns$`c-1_task-Together_d-Pseudo_g-Same gen` - patterns$`c-1_task-Together_d-Real_g-Same gen`,
+
+                              "C2 Alone Intergen" = patterns$`c-2_task-Alone_d-Pseudo_g-Intergen` - patterns$`c-2_task-Alone_d-Real_g-Intergen`,
+                              "C2 Alone Same gen" = patterns$`c-2_task-Alone_d-Pseudo_g-Same gen` - patterns$`c-2_task-Alone_d-Real_g-Same gen`,
+                              "C2 Together Intergen" = patterns$`c-2_task-Together_d-Pseudo_g-Intergen` - patterns$`c-2_task-Together_d-Real_g-Intergen`,
+                              "C2 Together Same gen" = patterns$`c-2_task-Together_d-Pseudo_g-Same gen` - patterns$`c-2_task-Together_d-Real_g-Same gen`,
+
+                              "C3 Alone Intergen" = patterns$`c-3_task-Alone_d-Pseudo_g-Intergen` - patterns$`c-3_task-Alone_d-Real_g-Intergen`,
+                              "C3 Alone Same gen" = patterns$`c-3_task-Alone_d-Pseudo_g-Same gen` - patterns$`c-3_task-Alone_d-Real_g-Same gen`,
+                              "C3 Together Intergen" = patterns$`c-3_task-Together_d-Pseudo_g-Intergen` - patterns$`c-3_task-Together_d-Real_g-Intergen`,
+                              "C3 Together Same gen" = patterns$`c-3_task-Together_d-Pseudo_g-Same gen` - patterns$`c-3_task-Together_d-Real_g-Same gen`,
+
+                              "CX Alone Intergen" = patterns$`c-X_task-Alone_d-Pseudo_g-Intergen` - patterns$`c-X_task-Alone_d-Real_g-Intergen`,
+                              "CX Alone Same gen" = patterns$`c-X_task-Alone_d-Pseudo_g-Same gen` - patterns$`c-X_task-Alone_d-Real_g-Same gen`,
+                              "CX Together Intergen" = patterns$`c-X_task-Together_d-Pseudo_g-Intergen` - patterns$`c-X_task-Together_d-Real_g-Intergen`,
+                              "CX Together Same gen" = patterns$`c-X_task-Together_d-Pseudo_g-Same gen` - patterns$`c-X_task-Together_d-Real_g-Same gen`
+                              ))
+
+# contrast(emm1a, method = list("Cluster 1 Old" = patterns$c1_together_old - patterns$c1_alone_old, 
+#                                           "Cluster 2 Old" = patterns$c2_together_old - patterns$c2_alone_old,
+#                                           "Cluster 3 Old" = patterns$c3_together_old - patterns$c3_alone_old,
+#                                           "Cluster X Old" = patterns$c4_together_old - patterns$c4_alone_old))
+# contrast(emm1a, method = list("Cluster 1 young" = patterns$c1_together_young - patterns$c1_alone_young, 
+#                                           "Cluster 2 young" = patterns$c2_together_young - patterns$c2_alone_young,
+#                                           "Cluster 3 young" = patterns$c3_together_young - patterns$c3_alone_young,
+#                                           "Cluster X young" = patterns$c4_together_young - patterns$c4_alone_young))
+# contrast(emm1a, method = list("Cluster 1 Together" = patterns$c1_together_old - patterns$c1_together_young, 
+#                               "Cluster 2 Together" = patterns$c2_together_old - patterns$c2_together_young, 
+#                               "Cluster 3 Together" = patterns$c3_together_old - patterns$c3_together_young, 
+#                               "Cluster X Together" = patterns$c4_together_old - patterns$c4_together_young,
+#                               "Cluster 1 Alone" = patterns$c1_alone_old - patterns$c1_alone_young, 
+#                               "Cluster 2 Alone" = patterns$c2_alone_old - patterns$c2_alone_young, 
+#                               "Cluster 3 Alone" = patterns$c3_alone_old - patterns$c3_alone_young,
+#                               "Cluster X Alone" = patterns$c4_alone_old - patterns$c4_alone_young
+# ))
+
+# Plot heat map
+breaks = c((min(df.emm1a$response) + 0.001), (max(df.emm1a$response)-0.001))
+ggplot(df.emm1a, aes(x=cluster, y=activity, fill=response)) +
+  geom_tile() +
+  scale_fill_viridis(option="magma", breaks=breaks, labels=c("lower", "higher")) +
+  facet_grid(dyadType~group)
+```

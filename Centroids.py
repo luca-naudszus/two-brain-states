@@ -66,6 +66,6 @@ for chromophore in range(2):
                     text = ax.text(j, i, round(centroids[chromophore][in_centroid][i, j], 3),
                         ha="center", va="center", color="b")
 
-        ax.set_title(f"Centroids {chromophores[chromophore]}, No.: {in_centroid}")
+        ax.set_title(f"Centroids {chromophores[chromophore]}, No.: {in_centroid + 1}")
         fig.tight_layout()
         plt.show()

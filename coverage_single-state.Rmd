@@ -1,0 +1,145 @@
+---
+title: "Coverage-single state"
+author: "Luca A. Naudszus"
+date: "2025-03-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load packages
+library(emmeans)
+library(lme4)
+library(MASS)
+library(tidyverse)
+library(viridis)
+
+theme_set(theme_light()+
+            theme(
+              plot.title = element_text(size=rel(1),face="bold"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.background = element_blank(),
+              axis.title = element_text(size=rel(1),face="bold"),
+              axis.text = element_text(size=rel(1),colour = 'black'),
+              strip.text = element_text(size=rel(1),colour = 'black', 
+                                        face = "bold"),
+              legend.text = element_text(size=rel(1)),
+              legend.title = element_text(size=rel(1),face="bold")))
+
+
+```
+
+## Load data
+
+```{r load_data}
+# load data
+fn = dir('results',
+         pattern = paste("coverage_table_one_brain_single",
+                         sep = "_"))[1]
+coverage_table = read.csv(file.path('results', fn))
+coverage_table$activity[coverage_table$activity == "Together_1" | coverage_table$activity == "Together_2"] = "Together"
+coverage_table <- coverage_table %>%
+  mutate(cluster = factor(cluster),
+         group = factor(group),
+         activity = factor(activity),
+         session = as.numeric(session)) %>%
+#  mutate(session = factor(session, levels = c(1, 2, 3, 4, 5, 6))) %>%
+  mutate(id = factor(id))
+str(coverage_table)
+```
+
+## Data exploration by clusters
+
+```{r plot1, echo=FALSE}
+ggplot(coverage_table, aes(x=session, y=coverage,
+                           color=interaction(activity, group))) +
+    # geom_boxplot(position=position_dodge(.9)) +
+  geom_jitter(alpha = .7, shape = 21, size =.5, width = 0.1) +
+  geom_smooth(method = "lm") +
+  scale_color_manual(values=c("pink", "lightblue", "red", "blue")) +
+  facet_grid(group~cluster)
+
+ggsave("single-state_byclusters.png", width = 7, height = 4, dpi = 400)
+```
+
+## Data exploration by sessions
+
+```{r plot2, echo=FALSE}
+ggplot(coverage_table, aes(x=cluster, y=coverage, color=activity)) +
+  geom_boxplot(position=position_dodge(.9)) +
+  scale_color_manual(values=c("red", "blue")) + 
+  facet_grid(group~session)
+ggsave("single-state_bysessions.png", width = 7, height = 4, dpi = 400)
+```
+
+## Fit model
+
+```{r fit, message=FALSE}
+# define model
+model1a <- 'coverage ~ cluster*activity*group'
+
+# fit model
+fit1a = glm.nb(model1a, data = coverage_table)
+anova(fit1a)
+summary(fit1a)
+```
+
+## Contrast analysis
+
+```{r contrasts, message=FALSE}
+# Get estimated means for main effects
+emmeans(fit1a, specs=pairwise~cluster, data=coverage_table, type="response")$contrasts
+emmeans(fit1a, specs=pairwise~activity, data=coverage_table, type="response")$contrasts
+emmeans(fit1a, specs=pairwise~group, data=coverage_table, type="response")$contrasts
+# Get estimated means for interaction effects
+#emmeans(fit1a, specs=pairwise~cluster*group, data=coverage_table, type="response")$contrasts
+#emmeans(fit1a, specs=pairwise~cluster*activity, data=coverage_table, type="response")$contrasts
+#emmeans(fit1a, specs=pairwise~activity*group, data=coverage_table, type="response")$contrasts
+# Get all estimated means in data frame
+emm1a <- emmeans(fit1a, specs=~cluster*activity*group, data=coverage_table, type="response") 
+df.emm1a <- emm1a %>% as_tibble()
+
+# Custom contrasts
+patterns <- list()
+foo <- c("alone_old", "together_old", "alone_young", "together_young")
+n_clusters <- length(levels(coverage_table$cluster))
+for (j in 1:length(foo)) {
+  for (i in 1:n_clusters) {
+    pattern <- rep(0, length(foo)*n_clusters)
+    pattern[i + (j-1)*n_clusters] <- 1
+    patterns[[paste0("c", i, "_", foo[j])]] <- pattern
+  }
+}
+contrast(emm1a, method = list("Cluster 1 Old" = patterns$c1_together_old - patterns$c1_alone_old, 
+                                          "Cluster 2 Old" = patterns$c2_together_old - patterns$c2_alone_old,
+                                          "Cluster 3 Old" = patterns$c3_together_old - patterns$c3_alone_old
+#                                          "Cluster 4 Old" = patterns$c4_together_old - patterns$c4_alone_old,
+#                                          "Cluster 5 Old" = patterns$c5_together_old - patterns$c5_alone_old,
+#                                          "Cluster 6 Old" = patterns$c6_together_old - patterns$c6_alone_old,
+#                                          "Cluster 7 Old" = patterns$c7_together_old - patterns$c7_alone_old,
+#                                          "Cluster 8 Old" = patterns$c8_together_old - patterns$c8_alone_old
+))
+contrast(emm1a, method = list("Cluster 1 young" = patterns$c1_together_young - patterns$c1_alone_young, 
+                                          "Cluster 2 young" = patterns$c2_together_young - patterns$c2_alone_young,
+                                          "Cluster 3 young" = patterns$c3_together_young - patterns$c3_alone_young
+#                                          "Cluster 4 young" = patterns$c4_together_young - patterns$c4_alone_young,
+#                                          "Cluster 5 young" = patterns$c5_together_young - patterns$c5_alone_young,
+#                                          "Cluster 6 young" = patterns$c6_together_young - patterns$c6_alone_young,
+#                                          "Cluster 7 young" = patterns$c7_together_young - patterns$c7_alone_young,
+#                                          "Cluster 8 young" = patterns$c8_together_young - patterns$c8_alone_young
+))
+contrast(emm1a, method = list("Cluster 1 Together" = patterns$c1_together_old - patterns$c1_together_young, 
+                              "Cluster 2 Together" = patterns$c2_together_old - patterns$c2_together_young, 
+                              "Cluster 3 Together" = patterns$c3_together_old - patterns$c3_together_young, 
+                              "Cluster 1 Alone" = patterns$c1_alone_old - patterns$c1_alone_young, 
+                              "Cluster 2 Alone" = patterns$c2_alone_old - patterns$c2_alone_young, 
+                              "Cluster 3 Alone" = patterns$c3_alone_old - patterns$c3_alone_young
+))
+breaks = c((min(df.emm1a$response) + 0.001), (max(df.emm1a$response)-0.001))
+ggplot(df.emm1a, aes(x=cluster, y=activity, fill=response)) + 
+  geom_tile() + 
+  scale_fill_viridis(option="magma", breaks=breaks, labels=c("lower", "higher")) + 
+  facet_grid(~group)
+```

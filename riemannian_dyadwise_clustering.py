@@ -35,21 +35,21 @@ from riemannianKMeans import (
 
 # ------------------------------------------------------------
 # Set path
-os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
+os.chdir('C://Users//SBS_T//Documents//Luca')
 outpath = 'results'
 
 # ------------------------------------------------------------
 # Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "one_brain"
+type_of_data = "four_blocks"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
 
 # do we want to use pseudo dyads?
-pseudo_dyads = False
+pseudo_dyads = True
 # True has excessive memory usage and 
 # cannot run on a standard machine at the moment. 
 # True is invalid for type_of_data == "one_brain", 
@@ -86,7 +86,7 @@ plot = True
 # hyperparameters (overridden in case of grid search)
 shrinkage = 0.1 # shrinkage value
 metrics = 'rbf' # kernel function
-n_clusters = 8 # number of clusters for k-means
+n_clusters = 4 # number of clusters for k-means
 
 # parameter space for grid search
 params_shrinkage = [0] #, 0.01, 0.1]

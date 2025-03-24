@@ -16,9 +16,8 @@ from riemannianKMeans import pseudodyads
 # ------------------------------------------------------------
 # Set variables
 
-os.chdir('/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code')
-
-type_of_data = "one_brain"
+os.chdir('C://Users//SBS_T//Documents//Luca')
+type_of_data = "four_blocks"
 
 # ------------------------------------------------------------
 # Load Data
@@ -33,6 +32,7 @@ if type_of_data == "one_brain":
     true_dyads = pd.read_csv(Path("data") / "dyadList.csv")
     dyads = pseudodyads(true_dyads) 
     for i, row in dyads.iterrows(): 
+        #TODO: Why do some IDs only appear in targetID and not in partnerID?
         targetID, partnerID, dyadType, dyadID, group = row['pID1'], row['pID2'], row['dyadType'], row['dyadID'], row['group'], 
         for session in range(6):
             for activity in sorted(set(results_table.activities)):
@@ -45,10 +45,10 @@ if type_of_data == "one_brain":
                             (results_table.sessions == session) & 
                             (results_table.ids == partnerID)]
                 if len(target) != 0 and len(partner) != 0: 
-                    classes = np.stack((target, partner), axis=1) + 1
+                    classes = np.stack((target + 1, partner + 1), axis=1)
                     for class_combination in product(np.unique(classes), repeat=2):
                         n = len(target)
-                        coverage = np.sum(classes[:,0] == class_combination[0] & (classes[:,1] == class_combination[1])) 
+                        coverage = np.sum((classes[:,0] == class_combination[0]) & (classes[:,1] == class_combination[1])) 
                         coverage_table.append(
                         [coverage, dyadID, dyadType, group, session + 1, activity, str(class_combination[0]) + "_" + str(class_combination[1]), n]
                         )
@@ -85,12 +85,12 @@ else:
         if (len(str(id)) == 4): 
             dyadType = True
             if str(id).startswith("1"): 
-                group = "same"
+                group = "Same gen"
             else:
-                group = "inter"
+                group = "Intergen"
         else:
             dyadType = False
-            group = "none"
+            group = "None"
         for session in sorted(set(results_table.sessions)):
             for activity in sorted(set(results_table.activities)):
                 n_total = len(results_table[
@@ -99,13 +99,13 @@ else:
                             (results_table.ids == id)])
                 if n_total > 0:
                     for cluster in sorted(set(results_table.classes)):          
-                        n = len(results_table[
-                            (results_table.classes == cluster + 1) & 
+                        coverage = len(results_table[
+                            (results_table.classes == cluster) & 
                             (results_table.activities == activity) & 
                             (results_table.sessions == session) & 
-                            (results_table.ids == id)]) / n_total
+                            (results_table.ids == id)])
                         coverage_table.append(
-                        [n, id, dyadType, group, session + 1, activity, cluster + 1, n_total]
+                        [coverage, id, dyadType, group, session + 1, activity, cluster + 1, n_total]
                         )
 
 coverage_table = pd.DataFrame(coverage_table, 

@@ -2,3 +2,4 @@ cutpoints_videos.xlsx
 preprocessed_data.npy
 duplicate_best_channels.csv
 fNIRS_best_channels.csv
+.Rproj.user
