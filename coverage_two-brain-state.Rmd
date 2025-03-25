@@ -101,6 +101,14 @@ model1a <- 'coverage ~ cluster*activity*dyadType*group'
 fit1a = glm.nb(model1a, data = coverage_table)
 anova(fit1a)
 summary(fit1a)
+
+# define model
+model2a <- 'coverage ~ cluster*activity*dyadType*group*session'
+
+# fit model
+fit2a = glm.nb(model2a, data = coverage_table)
+anova(fit2a)
+summary(fit2a)
 ```
 
 ## Contrast analysis

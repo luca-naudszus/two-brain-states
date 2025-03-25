@@ -15,11 +15,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 #---
-# TODO: Solve the naming mess. 
-from geomstats.learning.kmeans import RiemannianKMeans as RKM
 from pyriemann.utils.mean import mean_riemann
 from pyriemann.utils.tangentspace import tangent_space
-from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import adjusted_rand_score
 #---
@@ -252,7 +249,6 @@ def pipeline(X, y, id, session,
     print(f"Davies-Bouldin-Index: {db_score_pipeline}")
     print(f"Geodesic Distance Ratio: {gdr_pipeline}")
 
-
     # # ------------------------------------------------------------
     ### Rand indices
     rand_score_id = adjusted_rand_score(classes, ids_common) if clustering == 'all' else np.nan
@@ -346,8 +342,6 @@ def get_counts(strings):
 if type_of_data == "one_brain" and pseudo_dyads: 
     pseudo_dyads = False
     raise ValueError("Set pseudo_dyads = False for one brain data. For one brain data, pseudo dyads are created in a later step.")
-if (type_of_data != "four_blocks" or exp_block_size == 4) and interbrain:
-    raise ValueError("Inter-brain data is currently only implemented for type_of_data == 'four_blocks' and exp_block_size == 8.")
 if exp_block_size not in {4, 8}:
     raise ValueError('Unknown expected block size. Choose from 4, 8.')
 if clustering not in {'full', 'id-wise', 'session-wise'}:
@@ -606,8 +600,6 @@ if grid_search:
 # ------------------------------------------------------------
 ### Save results. Do not change this section. 
 print("saving results")
-if interbrain: 
-    type_of_data = "interbrain"
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 scores.to_csv(Path(outpath) / f"parameter_space_scores_{type_of_data}_{timestamp}.csv", index=False)
 if not grid_search: 
