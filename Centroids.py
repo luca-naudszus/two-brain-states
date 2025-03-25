@@ -19,23 +19,33 @@ os.chdir('C://Users//SBS_T//Documents//Luca')
 
 # ------------------------------------------------------------
 # Set variables
-type_of_data = "four_blocks"
-exp_block_size = 8
+type_of_data = "one_brain"
+ageDPFs = True
+
 if type_of_data == "one_brain":
+
     channels = ["LIFG", "LTPJ", "RIFG", "RTPJ"] 
+
 else: 
+    
     channels = ["LIFG_0", "LTPJ_0", "RIFG_0", "RTPJ_0",
                 "LIFG_1", "LTPJ_1", "RIFG_1", "RTPJ_1"] 
 
+
 # ------------------------------------------------------------
 # Load data
-path = Path("results")
+
+if ageDPFs: 
+    path = Path('results', 'ageDPFs')
+else: 
+    path = Path('results')
 fn_centroids = sorted(list(path.glob(f"cluster_means_{type_of_data}_*")))[-1]
 centroids = np.load(fn_centroids)
 fn_classes = sorted(list(path.glob(f"classes_{type_of_data}_*")))[-1]
 classes = np.load(fn_classes)
 fn_matrices = sorted(list(path.glob(f"matrices_{type_of_data}_*")))[-1]
 matrices = np.load(fn_matrices)
+exp_block_size = len(channels)
 
 # ------------------------------------------------------------
 # Preprocess centroids

@@ -17,11 +17,15 @@ from riemannianKMeans import pseudodyads
 # Set variables
 
 os.chdir('C://Users//SBS_T//Documents//Luca')
-type_of_data = "four_blocks"
+type_of_data = "one_brain"
+ageDPFs = True
 
 # ------------------------------------------------------------
 # Load Data
-path = Path('results')
+if ageDPFs: 
+    path = Path('results', 'ageDPFs')
+else: 
+    path = Path('results')
 fn = sorted(list(path.glob(f"results_table_{type_of_data}_*")))[-1]
 results_table = pd.read_csv(fn)
 

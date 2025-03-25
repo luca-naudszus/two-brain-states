@@ -37,7 +37,7 @@ theme_set(theme_light()+
 
 ```{r load_data}
 # load data
-fn = dir('results', 
+fn = dir(file.path('results', 'ageDPFs'),
          pattern = paste("coverage_table_one_brain.csv", 
                          sep = "_"))[1]
 coverage_table = read.csv(file.path('results', fn)) 
@@ -67,6 +67,15 @@ ggplot(coverage_table, aes(x=session, y=coverage,
   facet_grid(activity+dyadType~cluster)
 
 ggsave("shared-state-r_byclusters.png", width = 10, height = 7, dpi = 400)
+
+ggplot(coverage_table, aes(x=activity, y=coverage,
+                           color=dyadType)) +
+  geom_boxplot(position=position_dodge(.9)) +
+  # geom_jitter(alpha = .7, shape = 21, size =.5, width = 0.1) +
+  # scale_color_manual(values=c("red", "blue")) +
+  facet_grid(cluster~group)
+
+ggsave("shared-state-r_byclusters_wo.png", width = 18, height = 18  , dpi = 400)
 ```
 
 ## Data exploration by sessions

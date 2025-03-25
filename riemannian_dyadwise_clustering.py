@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 #---
+# TODO: Solve the naming mess. 
+from geomstats.learning.kmeans import RiemannianKMeans as RKM
 from pyriemann.utils.mean import mean_riemann
 from pyriemann.utils.tangentspace import tangent_space
 from sklearn.cluster import KMeans
@@ -38,7 +40,6 @@ from riemannianKMeans import (
 # ------------------------------------------------------------
 # Set path
 os.chdir('C://Users//SBS_T//Documents//Luca')
-outpath = 'results'
 
 # ------------------------------------------------------------
 # Set arguments. Change only variables in this section of the script. 
@@ -49,11 +50,7 @@ type_of_data = "four_blocks"
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
-# For two-brain data, do we want to focus on the inter-brain part?
-interbrain = True # True takes only the inter-brain part, False takes the whole matrix. 
-# TODO: Adapt interbrain for two_blocks approach. 
-# TODO: Adapt interbrain for four_blocks with exp_block_size == 4. 
-# TODO: Solve LinAlg issues. 
+age_DPFs = True 
 
 # do we want to use pseudo dyads?
 pseudo_dyads = False
@@ -68,9 +65,9 @@ use_missing_channels = False
 
 # how do we want to cluster?
 # Choose from 'full', 'id-wise', 'session-wise'
-clustering = 'full'
+clustering = 'id-wise'
 # Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
-which_id = 'all' # set which_id = 'all' for all dyads/participants
+which_id = 1003 # set which_id = 'all' for all dyads/participants
 # Which session do we want to look at? (only for session-wise clustering)
 which_session = 'all' # set which_session = 'all' for all sessions
 
@@ -93,7 +90,7 @@ plot = True
 # hyperparameters (overridden in case of grid search)
 shrinkage = 0.1 # shrinkage value
 metrics = 'rbf' # kernel function
-n_clusters = 4 # number of clusters for k-means
+n_clusters = 3 # number of clusters for k-means
 
 # parameter space for grid search
 params_shrinkage = [0] #, 0.01, 0.1]
@@ -171,7 +168,7 @@ def pipeline(X, y, id, session,
      
     # ------------------------------------------------------------
     ### Get kernel matrices with HybridBlocks
-    matrices = []
+    X_prepared = []
     
     for in_channelgroup in range(len(X_seg)):
         actual_block_sizes = blocks_seg[in_channelgroup][0]
@@ -183,29 +180,7 @@ def pipeline(X, y, id, session,
         block_kernels = HybridBlocks(block_size=block_size,
                                  shrinkage=shrinkage,
                                  metrics=metrics)
-        matrices.append(block_kernels.fit_transform(X_seg[in_channelgroup]))
-
-    # ------------------------------------------------------------
-    ### Use either whole matrix or only inter-brain part
-    if interbrain: 
-        X_prepared = []
-        for in_channelgroup in range(len(matrices)): 
-            block_matrices = []
-            actual_block_sizes = blocks_seg[in_channelgroup][0]
-            block_size = np.cumsum(actual_block_sizes)
-            for matrix in matrices[in_channelgroup]: 
-                hbo = matrix[block_size[0]:block_size[1], 
-                                  0:block_size[0]]
-                hbr = matrix[block_size[2]:block_size[3], 
-                                  block_size[1]:block_size[2]]
-                block_matrix = np.block([
-                    [hbo, np.zeros((hbo.shape[0], hbr.shape[1]))],  
-                    [np.zeros((hbr.shape[0], hbo.shape[1])), hbr]   
-                ])
-                block_matrices.append(block_matrix)
-            X_prepared.append(block_matrices)
-    else: 
-        X_prepared = matrices
+        X_prepared.append(block_kernels.fit_transform(X_seg[in_channelgroup]))
 
     # ------------------------------------------------------------
     ### Project matrices into common space
@@ -256,44 +231,27 @@ def pipeline(X, y, id, session,
 
     # ------------------------------------------------------------
     ### KMeans
-    if interbrain: 
-        flattener = FlattenTransformer()
-        flattened_matrices = flattener.fit_transform(final_matrices)
-        # TODO: This is a very bad temporary solution, where kmeans is not restricted to the manifold 
-        # on which the matrices live. 
-        kmeans = KMeans(n_clusters=n_clusters,
-                        n_init=n_init)
-        classes = kmeans.fit_predict(flattened_matrices)
-        cluster_means = kmeans.cluster_centers_ 
-    else: 
-        kmeans = RiemannianKMeans(n_jobs=n_jobs,
-                              n_clusters=n_clusters,
-                              n_init=n_init)
-        classes = kmeans.fit_predict(final_matrices)
-        cluster_means = kmeans.centroids()
+    kmeans = RiemannianKMeans(n_jobs=n_jobs,
+                            n_clusters=n_clusters,
+                            n_init=n_init)
+    classes = kmeans.fit_predict(final_matrices)
+    cluster_means = kmeans.centroids()
     clusters = [final_matrices[classes == i] for i in range(n_clusters)]
     
     # ------------------------------------------------------------
     ### Clustering performance evaluation
-    if not interbrain:
     #sh_score_pipeline = riemannian_silhouette_score(final_matrices, classes)
-        sh_score_pipeline = np.nan
-        ch_score_pipeline = ch_score(final_matrices, classes)
-        riem_var_pipeline = [riemannian_variance(clusters[i], cluster_means[i]) for i in range(n_clusters)]
-        db_score_pipeline = riemannian_davies_bouldin(clusters, cluster_means)
-        gdr_pipeline = geodesic_distance_ratio(clusters, cluster_means)
-        print(f"Silhouette Score: {sh_score_pipeline}")
-        print(f"Calinski-Harabasz Score: {ch_score_pipeline}")
-        print(f"Riemannian Variance: {np.mean(riem_var_pipeline)}")
-        print(f"Davies-Bouldin-Index: {db_score_pipeline}")
-        print(f"Geodesic Distance Ratio: {gdr_pipeline}")
-    else: 
-        # TODO: Find out how to calculate these measures in the interbrain case. 
-        sh_score_pipeline = np.nan
-        ch_score_pipeline = np.nan
-        riem_var_pipeline = np.nan
-        db_score_pipeline = np.nan
-        gdr_pipeline = np.nan
+    sh_score_pipeline = np.nan
+    ch_score_pipeline = ch_score(final_matrices, classes)
+    riem_var_pipeline = [riemannian_variance(clusters[i], cluster_means[i]) for i in range(n_clusters)]
+    db_score_pipeline = riemannian_davies_bouldin(clusters, cluster_means)
+    gdr_pipeline = geodesic_distance_ratio(clusters, cluster_means)
+    print(f"Silhouette Score: {sh_score_pipeline}")
+    print(f"Calinski-Harabasz Score: {ch_score_pipeline}")
+    print(f"Riemannian Variance: {np.mean(riem_var_pipeline)}")
+    print(f"Davies-Bouldin-Index: {db_score_pipeline}")
+    print(f"Geodesic Distance Ratio: {gdr_pipeline}")
+
 
     # # ------------------------------------------------------------
     ### Rand indices
@@ -305,24 +263,8 @@ def pipeline(X, y, id, session,
 
     # ------------------------------------------------------------
     ### PCA 
-    # TODO: For compatibility with plotting, all _common variables are altered in this step. 
-    # However, we want to output the unaltered versions, so change this. 
-    if interbrain: 
-        data_stacked, classes_stacked, channels_stacked, sessions_stacked, activities_stacked = [], [], [], [], []
-        for i, matrix in enumerate(final_matrices):
-            data_stacked.append(matrix)
-            classes_stacked.extend([classes[i]] * matrix.shape[0])  
-            channels_stacked.extend([channels_common[i]] * matrix.shape[0])  
-            sessions_stacked.extend([sessions_common[i]] * matrix.shape[0])  
-            activities_stacked.extend([activities_common[i]] * matrix.shape[0])  
-        X_tangent = np.vstack(data_stacked) # not an actual tangent space representation, just a name for compatibility
-        classes = np.array(classes_stacked) 
-        channels_common = np.array(channels_stacked)
-        sessions_common = np.array(sessions_stacked)
-        activities_common = np.array(activities_stacked)
-    else: 
-        mean_matrix = mean_riemann(final_matrices)
-        X_tangent = tangent_space(final_matrices, mean_matrix)
+    mean_matrix = mean_riemann(final_matrices)
+    X_tangent = tangent_space(final_matrices, mean_matrix)
     pca = PCA(n_components=2)
     X_pca = pca.fit_transform(X_tangent)
 
@@ -404,7 +346,7 @@ def get_counts(strings):
 if type_of_data == "one_brain" and pseudo_dyads: 
     pseudo_dyads = False
     raise ValueError("Set pseudo_dyads = False for one brain data. For one brain data, pseudo dyads are created in a later step.")
-if type_of_data != "four_blocks" or exp_block_size == 4 and interbrain:
+if (type_of_data != "four_blocks" or exp_block_size == 4) and interbrain:
     raise ValueError("Inter-brain data is currently only implemented for type_of_data == 'four_blocks' and exp_block_size == 8.")
 if exp_block_size not in {4, 8}:
     raise ValueError('Unknown expected block size. Choose from 4, 8.')
@@ -415,14 +357,20 @@ if demean:
         raise ValueError("Invalid demeaner method. Choose from 'log-euclidean', 'tangent', 'projection', 'airm'")
     if demeaner_var not in {'id-wise', 'session-wise'}:
         raise ValueError("Invalid demeaner variable. Choose 'id-wise' or 'session-wise'")
+if age_DPFs:
+    datapath = Path("data", "prepareddata_ageDPFs")
+    outpath = Path('results', 'ageDPFs')
+else:
+    datapath = Path("data", "prepareddata")
+    outpath = Path('results')
 
 # Load the dataset
 pseudo = "true" if pseudo_dyads else "false"
-npz_data = np.load(f"./data/ts_{type_of_data}_fb-{which_freq_bands}_pseudo-{pseudo}.npz")
+npz_data = np.load(Path(datapath) / f"ts_{type_of_data}_fb-{which_freq_bands}_pseudo-{pseudo}.npz")
 X = []
 for array in list(npz_data.files):
     X.append(npz_data[array])
-doc = pd.read_csv(f"./data/doc_{type_of_data}_pseudo-{pseudo}.csv", index_col = 0)
+doc = pd.read_csv(Path(datapath) / f"doc_{type_of_data}_pseudo-{pseudo}.csv", index_col = 0)
 ids = np.array(doc['id'])
 sessions = np.array(doc['session'])
 conditions = [
@@ -432,7 +380,7 @@ conditions = [
     (doc['activity'] == 3)]
 choices = ['Alone', 'Together_1', 'Together_2', 'diverse']
 y = np.select(conditions, choices, default='unknown')
-npz_channels = np.load(f"./data/channels_{type_of_data}_pseudo-{pseudo}.npz")
+npz_channels = np.load(Path(datapath) / f"channels_{type_of_data}_pseudo-{pseudo}.npz")
 channels = []
 for array in list(npz_channels.files):
     channels.append(npz_channels[array])
@@ -564,7 +512,7 @@ if grid_search:
     # ATTENTION: This script currently does not use the hybrid property of HybridBlocks. 
     # All hyperparameters are set to the same value in each iteration for all blocks. 
     # The commented-out lines below allow for separate shrinkage parameters and kernels per block.  
-    # This leads to much longer runtimes and is therefore avoided here. 
+    # That option leads to much longer runtimes and is therefore avoided here. 
 
     # Compute grid search parameters from inputs
     #comb_shrinkage = product(params_shrinkage, repeat = exp_n_blocks)

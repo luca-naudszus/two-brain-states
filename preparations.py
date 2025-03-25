@@ -23,11 +23,12 @@ from riemannianKMeans import pseudodyads
 
 # ------------------------------------------------------------
 # Set variables
-path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/code/data"
+path = "C://Users//SBS_T//Documents//Luca//data"
 #path = "./data"
 
-pseudo_dyads = True # Create pseudo dyads
+pseudo_dyads = False # Create pseudo dyads
 session_wise = False # Might lead to memory issues when creating pseudo dyads
+ageDPFs = True
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
 upsampling_freq = 5
@@ -99,7 +100,12 @@ def add_durations(targetID, session_n, in_epoch, duration_epoch, true_duration):
 
 # ------------------------------------------------------------
 # Load data
-inpath = Path(path, "preprocesseddata")
+if ageDPFs: 
+    inpath = Path(path, "preprocesseddata_ageDPFs")
+    outpath = Path(path, "prepareddata_ageDPFs")
+else: 
+    inpath = Path(path, "preprocesseddata")
+    outpath = Path(path, "prepareddata")
 true_dyads = pd.read_csv(Path(path, "dyadList.csv")) # list of true dyads
 cutpoints = pd.read_excel(Path(path, "cutpoints_videos.xlsx")) # list of activity durations from video data
 best_channels = pd.read_csv(Path(path, "fNIRS_chs_ROIproximal.csv"))
@@ -406,13 +412,13 @@ for i, row in dyads.iterrows():
 pseudo = "true" if pseudo_dyads else "false"
 
 for key in list(ts.keys()):
-    np.savez(Path(path, f"ts_{key}_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['channel-wise'])
-    np.savez(Path(path, f"ts_{key}_session_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['session-wise'])
+    np.savez(Path(outpath, f"ts_{key}_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['channel-wise'])
+    np.savez(Path(outpath, f"ts_{key}_session_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['session-wise'])
     columns = [
         "id", "session", "activity"] if key == "one_brain" else [
         "id", "isReal", "group", "session", "activity"
     ]
     pd.DataFrame(doc[key], 
                  columns=columns).to_csv(
-                     Path(path, f"doc_{key}_pseudo-{pseudo}.csv"))
-    np.savez(Path(path, f"channels_{key}_pseudo-{pseudo}"), *channels[key])
+                     Path(outpath, f"doc_{key}_pseudo-{pseudo}.csv"))
+    np.savez(Path(outpath, f"channels_{key}_pseudo-{pseudo}"), *channels[key])
