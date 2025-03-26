@@ -7,7 +7,6 @@
 
 from datetime import datetime
 import json
-import os
 from pathlib import Path
 #---
 from itertools import product
@@ -22,7 +21,6 @@ from sklearn.metrics import adjusted_rand_score
 #---
 from riemannianKMeans import (
     Demeaner, 
-    FlattenTransformer, 
     ListTimeSeriesWindowTransformer, 
     HybridBlocks, 
     RiemannianKMeans, 
@@ -36,7 +34,7 @@ from riemannianKMeans import (
 
 # ------------------------------------------------------------
 # Set path
-os.chdir('C://Users//SBS_T//Documents//Luca')
+path = 'C://Users//SBS_T//Documents//Luca'
 
 # ------------------------------------------------------------
 # Set arguments. Change only variables in this section of the script. 
@@ -47,10 +45,10 @@ type_of_data = "four_blocks"
 # one_brain_session etc.: channel- and session-wise z-scoring
 exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
-age_DPFs = True 
+ageDPFs = False
 
 # do we want to use pseudo dyads?
-pseudo_dyads = False
+pseudo_dyads = True
 # True has excessive memory usage and 
 # cannot run on a standard machine at the moment. 
 # True is invalid for type_of_data == "one_brain", 
@@ -62,19 +60,20 @@ use_missing_channels = False
 
 # how do we want to cluster?
 # Choose from 'full', 'id-wise', 'session-wise'
-clustering = 'id-wise'
+clustering = 'full'
 # Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
-which_id = 1003 # set which_id = 'all' for all dyads/participants
+which_id = 'all' # set which_id = 'all' for all dyads/participants
 # Which session do we want to look at? (only for session-wise clustering)
-which_session = 'all' # set which_session = 'all' for all sessions
+which_session = 'all' # set which_session = 'all' for a ll sessions
 
 # should the matrices be demeaned? 
-demean = False
+demean = True
 # if so, within-id or within-session?
 demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
 # if so, which method?
-demeaner_method = 'projection' # 'log-euclidean', 'tangent', 'projection', or 'airm'
-# 'projection' takes the longest, but seems to give the best result
+demeaner_method = 'log-euclidean' # 'log-euclidean', 'tangent', 'projection', or 'airm'
+# 'projection' takes the longest, but seems to give the best result for some dyads
+#TODO: Generally, projection does not seem to work. Why?
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
 grid_search = False
@@ -342,21 +341,30 @@ def get_counts(strings):
 if type_of_data == "one_brain" and pseudo_dyads: 
     pseudo_dyads = False
     raise ValueError("Set pseudo_dyads = False for one brain data. For one brain data, pseudo dyads are created in a later step.")
+
 if exp_block_size not in {4, 8}:
     raise ValueError('Unknown expected block size. Choose from 4, 8.')
+
 if clustering not in {'full', 'id-wise', 'session-wise'}:
     raise ValueError(f"Unknown clustering type: {clustering}. Choose from 'full', 'id-wise', or 'session-wise'.")
+
 if demean:
     if demeaner_method not in {'log-euclidean', 'tangent', 'projection', 'airm'}:
         raise ValueError("Invalid demeaner method. Choose from 'log-euclidean', 'tangent', 'projection', 'airm'")
     if demeaner_var not in {'id-wise', 'session-wise'}:
         raise ValueError("Invalid demeaner variable. Choose 'id-wise' or 'session-wise'")
-if age_DPFs:
-    datapath = Path("data", "prepareddata_ageDPFs")
-    outpath = Path('results', 'ageDPFs')
+else: 
+    demeaner_method = "False"
+
+# Make folder
+if ageDPFs:
+    datapath = Path(path) / "data" / "prepareddata_ageDPFs"
 else:
-    datapath = Path("data", "prepareddata")
-    outpath = Path('results')
+    datapath = Path(path)  / "data" / "prepareddata"
+adpfs = "ageDPFs" if ageDPFs else "usual"
+outpath = Path(path) / "results" / adpfs / f"demean-{demeaner_method}"
+if not outpath.is_dir():
+    outpath.mkdir()
 
 # Load the dataset
 pseudo = "true" if pseudo_dyads else "false"
@@ -604,7 +612,7 @@ timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 scores.to_csv(Path(outpath) / f"parameter_space_scores_{type_of_data}_{timestamp}.csv", index=False)
 if not grid_search: 
     np.save(Path(outpath) / f"matrices_{type_of_data}_{timestamp}.npy", matrices)
-    np.save(Path(outpath) /f"cluster_means_{type_of_data}_{timestamp}.npy", cluster_means)
+    np.save(Path(outpath) / f"cluster_means_{type_of_data}_{timestamp}.npy", cluster_means)
     np.save(Path(outpath) / f"classes_{type_of_data}_{timestamp}.npy", classes)
     results_table.to_csv(Path(outpath) / f"results_table_{type_of_data}_{timestamp}.csv", index=False)
 json_object = json.dumps(pipeline_metadata, indent=4)

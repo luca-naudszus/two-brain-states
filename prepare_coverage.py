@@ -4,7 +4,6 @@
 # ------------------------------------------------------------
 # Import packages and custom functions
 
-import os
 from pathlib import Path
 #---
 from itertools import product
@@ -16,49 +15,49 @@ from riemannianKMeans import pseudodyads
 # ------------------------------------------------------------
 # Set variables
 
-os.chdir('C://Users//SBS_T//Documents//Luca')
-type_of_data = "one_brain"
-ageDPFs = True
+path = 'C://Users//SBS_T//Documents//Luca'
+type_of_data = "four_blocks"
+ageDPFs = False
+demean = "tangent"
 
 # ------------------------------------------------------------
 # Load Data
-if ageDPFs: 
-    path = Path('results', 'ageDPFs')
-else: 
-    path = Path('results')
-fn = sorted(list(path.glob(f"results_table_{type_of_data}_*")))[-1]
+adpfs = "ageDPFs" if ageDPFs else "usual"
+outpath = Path(path) / "results" / adpfs / f"demean-{demean}"
+
+fn = sorted(list(outpath.glob(f"results_table_{type_of_data}_*")))[-1]
 results_table = pd.read_csv(fn)
 
 # ------------------------------------------------------------
 # Calculate coverage
 coverage_table, coverage_table_single = [], []
+sorted_activities = sorted(set(results_table.activities))
 if type_of_data == "one_brain": 
-    true_dyads = pd.read_csv(Path("data") / "dyadList.csv")
+    true_dyads = pd.read_csv(Path(path) / "data" / "dyadList.csv")
     dyads = pseudodyads(true_dyads) 
     for i, row in dyads.iterrows(): 
         #TODO: Why do some IDs only appear in targetID and not in partnerID?
-        targetID, partnerID, dyadType, dyadID, group = row['pID1'], row['pID2'], row['dyadType'], row['dyadID'], row['group'], 
+        targetID, partnerID, dyadType, dyadID, group = row['pID1'], row['pID2'], row['dyadType'], row['dyadID'], row['group']
         for session in range(6):
-            for activity in sorted(set(results_table.activities)):
-                target = results_table.classes[
-                            (results_table.activities == activity) & 
-                            (results_table.sessions == session) & 
-                            (results_table.ids == targetID)]
-                partner = results_table.classes[
-                            (results_table.activities == activity) & 
-                            (results_table.sessions == session) & 
-                            (results_table.ids == partnerID)]
-                if len(target) != 0 and len(partner) != 0: 
+            for activity in sorted_activities:
+                session_activity_df = results_table[
+                    (results_table.activities == activity) & 
+                    (results_table.sessions == session)
+                ]
+                target = session_activity_df.loc[session_activity_df.ids == targetID, "classes"]
+                partner = session_activity_df.loc[session_activity_df.ids == partnerID, "classes"]
+                if not (target.empty or partner.empty): 
                     classes = np.stack((target + 1, partner + 1), axis=1)
                     for class_combination in product(np.unique(classes), repeat=2):
                         n = len(target)
-                        coverage = np.sum((classes[:,0] == class_combination[0]) & (classes[:,1] == class_combination[1])) 
-                        coverage_table.append(
-                        [coverage, dyadID, dyadType, group, session + 1, activity, str(class_combination[0]) + "_" + str(class_combination[1]), n]
-                        )
+                        coverage_table.extend([
+                            [np.sum((classes[:, 0] == c1) & (classes[:, 1] == c2)), dyadID, dyadType, group, session + 1, activity,
+                                f"{c1}_{c2}", n]
+                                for c1, c2 in product(np.unique(classes), repeat=2)
+                            ])
         if dyadType: 
             for session in range(6):
-                for activity in sorted(set(results_table.activities)):
+                for activity in sorted_activities:
                     target = results_table.classes[
                                 (results_table.activities == activity) & 
                                 (results_table.sessions == session) & 
@@ -97,7 +96,7 @@ else:
             dyadType = False
             group = "None"
         for session in sorted(set(results_table.sessions)):
-            for activity in sorted(set(results_table.activities)):
+            for activity in sorted_activities:
                 n_total = len(results_table[
                             (results_table.activities == activity) & 
                             (results_table.sessions == session) & 
@@ -122,7 +121,7 @@ if type_of_data == "one_brain":
 # ------------------------------------------------------------
 ### Save results. 
 
-coverage_table.to_csv((path / f"coverage_table_{type_of_data}.csv"), index=False)
+coverage_table.to_csv((outpath / f"coverage_table_{type_of_data}.csv"), index=False)
 if type_of_data == "one_brain":
-    coverage_table_single.to_csv((path / f"coverage_table_{type_of_data}_single.csv"), index=False)
+    coverage_table_single.to_csv((outpath / f"coverage_table_{type_of_data}_single.csv"), index=False)
     

@@ -7,7 +7,6 @@
 
 # ------------------------------------------------------------
 # Import packages and custom functions
-import os
 from pathlib import Path
 #---
 import matplotlib.pyplot as plt
@@ -15,12 +14,13 @@ import numpy as np
 
 # ------------------------------------------------------------
 # Set path
-os.chdir('C://Users//SBS_T//Documents//Luca')
+path = 'C://Users//SBS_T//Documents//Luca'
 
 # ------------------------------------------------------------
 # Set variables
 type_of_data = "one_brain"
-ageDPFs = True
+ageDPFs = False
+demean = True
 
 if type_of_data == "one_brain":
 
@@ -35,15 +35,13 @@ else:
 # ------------------------------------------------------------
 # Load data
 
-if ageDPFs: 
-    path = Path('results', 'ageDPFs')
-else: 
-    path = Path('results')
-fn_centroids = sorted(list(path.glob(f"cluster_means_{type_of_data}_*")))[-1]
+adpfs = "ageDPFs" if ageDPFs else "usual"
+outpath = Path(path) / "results" / adpfs / f"demean-{demean}"
+fn_centroids = sorted(list(outpath.glob(f"cluster_means_{type_of_data}_*")))[-1]
 centroids = np.load(fn_centroids)
-fn_classes = sorted(list(path.glob(f"classes_{type_of_data}_*")))[-1]
+fn_classes = sorted(list(outpath.glob(f"classes_{type_of_data}_*")))[-1]
 classes = np.load(fn_classes)
-fn_matrices = sorted(list(path.glob(f"matrices_{type_of_data}_*")))[-1]
+fn_matrices = sorted(list(outpath.glob(f"matrices_{type_of_data}_*")))[-1]
 matrices = np.load(fn_matrices)
 exp_block_size = len(channels)
 
@@ -53,9 +51,9 @@ exp_block_size = len(channels)
 ### Separate HbO and HbR data
 centroids_hbo, centroids_hbr = [], []
 for centroid in centroids:
-    centroids_hbo.append(np.tril(centroid[:exp_block_size,:exp_block_size]))
+    centroids_hbo.append(np.tril(centroid[:exp_block_size,:exp_block_size], k=-1))
     centroids_hbr.append(np.tril(centroid[exp_block_size:(exp_block_size*2),
-                                         exp_block_size:(exp_block_size*2)]))
+                                         exp_block_size:(exp_block_size*2)], k=-1))
 
 # ------------------------------------------------------------
 # Plot
@@ -72,7 +70,7 @@ for chromophore in range(2):
         ax.set_yticks(range(len(channels)), labels=channels)
         for i in range(len(channels)):
             for j in range(len(channels)):
-                if j <= i:
+                if j < i:
                     text = ax.text(j, i, round(centroids[chromophore][in_centroid][i, j], 3),
                         ha="center", va="center", color="b")
 

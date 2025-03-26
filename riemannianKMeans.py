@@ -559,32 +559,46 @@ def euclidean_centering_with_projection(spd_matrices):
 
 def airm_centering(spd_matrices):
     """
-    Demeans SPD matrices using Affine-Invariant Riemannian Mean (AIRM) as the reference.
+    Projects SPD matrices to tangent space, centers there using Affine-Invariant Riemannian Mean (AIRM) as the reference,
+    and maps back to SPD space. This respects the curved geometry of the SPD manifold. 
 
     Parameters:
-    - spd_matrices: list of (n, n) SPD matrices.
+        spd_matrices: List of SPD matrices of shape (n_matrices, d, d).
 
     Returns:
-    - Centered SPD matrices.
+        np.array: Centered SPD matrices of shape (n_matrices, target_dim, target_dim).
     """
     n_matrices = len(spd_matrices)
-    # Compute the Riemannian mean using pyriemann
+    # Compute the matrix square root and its inverse of the Riemannian mean
     reference = mean_riemann(spd_matrices)
     ref_sqrt = sqrtm(reference)
     ref_inv_sqrt = np.linalg.inv(ref_sqrt)
-    # Project matrices to tangent space
+    # Project matrices to tangent space (align X with mean, compute logarithm, project back)
     log_matrices = [ref_inv_sqrt @ logm(ref_inv_sqrt @ X @ ref_inv_sqrt) @ ref_inv_sqrt for X in spd_matrices]
-    # Compute mean in tangent space
+    # Operate in tangent space: center matrices; then send back to SPD space
     log_mean = sum(log_matrices) / n_matrices
-    # Demean and project back to SPD space
     spd_centered = [ref_sqrt @ expm(ref_sqrt @ (log_X - log_mean) @ ref_sqrt) @ ref_sqrt for log_X in log_matrices]
     return spd_centered
 
 def log_euclidean_centering(spd_matrices):
+    """
+    Projects SPD matrices to log-Euclidean space, centers there, and maps back to SPD space.
+    In log-Euclidean framework, centering is well-defined. This does not respect the curved geometry of the SPD manifold.
+
+    Parameters:
+        spd_matrices (list of np.array): List of SPD matrices of shape (n_matrices, d, d).
+    
+    Returns:
+        np.array: Centered SPD matrices of shape (n_matrices, target_dim, target_dim).
+    """
+    # compute logarithm of mean matrix
     reference = mean_riemann(spd_matrices)
-    ref_log = logm(reference)
+    ref_log = logm(reference) 
+    # compute logarithm of all input matrices
     log_matrices = [logm(X) for X in spd_matrices]
+    # operate in log-Euclidean space: demean matrices
     demeaned_matrices = [log_X - ref_log for log_X in log_matrices]
+    # map all matrices back to SPD space using the exponential
     spd_centered = [expm(ref_log + matrix) for matrix in demeaned_matrices]
     return spd_centered
 

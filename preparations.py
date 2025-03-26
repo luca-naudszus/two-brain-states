@@ -27,8 +27,8 @@ path = "C://Users//SBS_T//Documents//Luca//data"
 #path = "./data"
 
 pseudo_dyads = False # Create pseudo dyads
-session_wise = False # Might lead to memory issues when creating pseudo dyads
-ageDPFs = True
+session_wise = True # Might lead to memory issues when creating pseudo dyads
+ageDPFs = False
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
 upsampling_freq = 5
