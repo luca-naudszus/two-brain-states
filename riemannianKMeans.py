@@ -507,28 +507,26 @@ def riemannian_davies_bouldin(clusters, means):
     
     return np.mean(db_values)
 
-def tangent_space_centering(spd_matrices, reference=None):
+def tangent_space_centering(spd_matrices):
     """
-    Demeans SPD matrices in the tangent space at a chosen reference matrix.
+    Demeans SPD matrices in the tangent space at the Euclidean mean matrix.
 
     Parameters:
-    - spd_matrices: list of (n, n) SPD matrices.
-    - reference: (n, n) SPD matrix (optional). Defaults to Euclidean mean.
+        spd_matrices: list of (n, n) SPD matrices.
+        reference: (n, n) SPD matrix (optional). Defaults to Euclidean mean.
 
     Returns:
-    - Centered SPD matrices.
+        np.array: Centered SPD matrices.
     """
     n_matrices = len(spd_matrices)
-    # Compute reference if not provided (Euclidean mean by default)
-    if reference is None:
-        reference = sum(spd_matrices) / n_matrices
+    # Compute the matrix square root and its inverse of the Euclidean mean. 
+    reference = sum(spd_matrices) / n_matrices
     ref_sqrt = sqrtm(reference)
     ref_inv_sqrt = np.linalg.inv(ref_sqrt)
-    # Project matrices to tangent space
+    # Project matrices to tangent space (align X with mean, compute logarithm, project back)
     log_matrices = [ref_inv_sqrt @ logm(ref_inv_sqrt @ X @ ref_inv_sqrt) @ ref_inv_sqrt for X in spd_matrices]
-    # Compute mean in tangent space
+    # Operate in tangent space: center matrices; then send back to SPD space
     log_mean = sum(log_matrices) / n_matrices
-    # Demean and project back to SPD space
     spd_centered = [ref_sqrt @ expm(ref_sqrt @ (log_X - log_mean) @ ref_sqrt) @ ref_sqrt for log_X in log_matrices]
     return spd_centered
 
@@ -538,17 +536,19 @@ def project_to_spd(matrix):
     """
     eigvals, eigvecs = np.linalg.eigh(matrix)
     eigvals = np.maximum(eigvals, 1e-6)  # Ensure SPD by making all eigenvalues positive
+    #TODO: Find out why the result is not always SPD. 
     return eigvecs @ np.diag(eigvals) @ eigvecs.T
 
 def euclidean_centering_with_projection(spd_matrices):
     """
-    Demeans SPD matrices using Euclidean mean and projects back to SPD space.
+    Centers SPD matrices using Euclidean mean. Projects back to SPD space by setting negative eigenvalues to a small positive value.
+    Quick and dirty solution. 
 
     Parameters:
-    - spd_matrices: list of (n, n) SPD matrices.
+        spd_matrices: list of (n, n) SPD matrices.
 
     Returns:
-    - Centered SPD matrices.
+        np.array: Centered SPD matrices.
     """
     n_matrices = len(spd_matrices)
     # Compute Euclidean mean

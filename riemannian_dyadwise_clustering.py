@@ -72,8 +72,10 @@ demean = True
 demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
 # if so, which method?
 demeaner_method = 'log-euclidean' # 'log-euclidean', 'tangent', 'projection', or 'airm'
-# 'projection' takes the longest, but seems to give the best result for some dyads
-#TODO: Generally, projection does not seem to work. Why?
+#TODO: Generally, projection does not seem to work. That is not important because it is just the quick and dirty solution, but why?
+# Log-euclidean is the second-fastest and the fastest among the two meaningful implementations. 
+# AIRM is slower, but more accurate (respects the curvature of the SPD manifold.)
+#TODO: Tangent-space demeaning is like AIRM demeaning but with the Euclidean and not the Riemannian mean and probably makes no sense. Is this true?
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
 grid_search = False
