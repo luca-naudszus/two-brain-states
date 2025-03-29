@@ -15,10 +15,10 @@ from riemannianKMeans import pseudodyads
 # ------------------------------------------------------------
 # Set variables
 
-path = 'C://Users//SBS_T//Documents//Luca'
-type_of_data = "four_blocks"
+path = '/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/analysis'
+type_of_data = "one_brain"
 ageDPFs = False
-demean = "tangent"
+demean = "false"
 
 # ------------------------------------------------------------
 # Load Data
@@ -48,13 +48,12 @@ if type_of_data == "one_brain":
                 partner = session_activity_df.loc[session_activity_df.ids == partnerID, "classes"]
                 if not (target.empty or partner.empty): 
                     classes = np.stack((target + 1, partner + 1), axis=1)
-                    for class_combination in product(np.unique(classes), repeat=2):
-                        n = len(target)
-                        coverage_table.extend([
-                            [np.sum((classes[:, 0] == c1) & (classes[:, 1] == c2)), dyadID, dyadType, group, session + 1, activity,
+                    n = len(target)
+                    coverage_table.extend([
+                        [np.sum((classes[:, 0] == c1) & (classes[:, 1] == c2)), dyadID, dyadType, group, session + 1, activity,
                                 f"{c1}_{c2}", n]
                                 for c1, c2 in product(np.unique(classes), repeat=2)
-                            ])
+                        ])
         if dyadType: 
             for session in range(6):
                 for activity in sorted_activities:

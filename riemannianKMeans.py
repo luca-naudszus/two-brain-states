@@ -363,7 +363,7 @@ class Demeaner(BaseEstimator, TransformerMixin):
         self.activate = activate
         self.groups = np.array(groups)
         self.method = method # "log-euclidean", "tangent", "projection", "airm"
-
+  
     def fit(self, X, y=None):
         return self
     

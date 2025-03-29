@@ -34,21 +34,21 @@ from riemannianKMeans import (
 
 # ------------------------------------------------------------
 # Set path
-path = 'C://Users//SBS_T//Documents//Luca'
+path = '/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/analysis'
 
 # ------------------------------------------------------------
 # Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "four_blocks"
+type_of_data = "one_brain"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
-exp_block_size = 8
+exp_block_size = 4
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
 ageDPFs = False
 
 # do we want to use pseudo dyads?
-pseudo_dyads = True
+pseudo_dyads = False
 # True has excessive memory usage and 
 # cannot run on a standard machine at the moment. 
 # True is invalid for type_of_data == "one_brain", 
@@ -71,7 +71,7 @@ demean = True
 # if so, within-id or within-session?
 demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
 # if so, which method?
-demeaner_method = 'log-euclidean' # 'log-euclidean', 'tangent', 'projection', or 'airm'
+demeaner_method = 'airm' # 'log-euclidean', 'tangent', 'projection', or 'airm'
 #TODO: Generally, projection does not seem to work. That is not important because it is just the quick and dirty solution, but why?
 # Log-euclidean is the second-fastest and the fastest among the two meaningful implementations. 
 # AIRM is slower, but more accurate (respects the curvature of the SPD manifold.)
@@ -202,7 +202,7 @@ def pipeline(X, y, id, session,
             if demeaner_var == 'id-wise':
                groups = ids_common
             elif demeaner_var == 'session-wise':
-                groups = sessions_common
+                groups = ["_".join(map(str, t)) for t in list(zip(ids_common, sessions_common))]
             else: 
                 demean = False
                 print("Warning: will not demean because demeaning mode is unclear.")
@@ -219,6 +219,7 @@ def pipeline(X, y, id, session,
             demean = False
             print("Warning: will not demean because clustering is session-wise.")
     if demean: 
+        #TODO: Why does the Demeaner inflate the number of variables?
         demeaner = Demeaner(groups=groups,
                         activate=demean,
                         method=demeaner_method)
@@ -343,7 +344,8 @@ def get_counts(strings):
 if type_of_data == "one_brain" and pseudo_dyads: 
     pseudo_dyads = False
     raise ValueError("Set pseudo_dyads = False for one brain data. For one brain data, pseudo dyads are created in a later step.")
-
+if type_of_data == "one_brain" and exp_block_size == 8: 
+    print("Warning: one-brain data with block size 8 is unusual, check if this is what you want.")
 if exp_block_size not in {4, 8}:
     raise ValueError('Unknown expected block size. Choose from 4, 8.')
 

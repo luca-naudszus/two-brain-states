@@ -14,13 +14,13 @@ import numpy as np
 
 # ------------------------------------------------------------
 # Set path
-path = 'C://Users//SBS_T//Documents//Luca'
+path = '/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/analysis'
 
 # ------------------------------------------------------------
 # Set variables
 type_of_data = "one_brain"
 ageDPFs = False
-demean = True
+demean = False
 
 if type_of_data == "one_brain":
 
