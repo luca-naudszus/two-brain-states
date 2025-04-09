@@ -18,7 +18,7 @@ path = '/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational
 
 # ------------------------------------------------------------
 # Set variables
-type_of_data = "one_brain"
+type_of_data = "four_blocks"
 ageDPFs = False
 demean = False
 

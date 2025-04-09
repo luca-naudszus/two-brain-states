@@ -43,7 +43,7 @@ path = '/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational
 type_of_data = "one_brain"
 # one_brain, two_blocks, four_blocks: channel-wise z-scoring
 # one_brain_session etc.: channel- and session-wise z-scoring
-exp_block_size = 4
+exp_block_size = 8
 which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
 ageDPFs = False
 
@@ -67,7 +67,7 @@ which_id = 'all' # set which_id = 'all' for all dyads/participants
 which_session = 'all' # set which_session = 'all' for a ll sessions
 
 # should the matrices be demeaned? 
-demean = True
+demean = False
 # if so, within-id or within-session?
 demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
 # if so, which method?
@@ -78,7 +78,7 @@ demeaner_method = 'airm' # 'log-euclidean', 'tangent', 'projection', or 'airm'
 #TODO: Tangent-space demeaning is like AIRM demeaning but with the Euclidean and not the Riemannian mean and probably makes no sense. Is this true?
 
 # do we want to do a single run or a grid search? (False = single run, True = grid search)
-grid_search = False
+grid_search = True
 ## in case of False, define hyperparameters below
 ## in case of True, define parameter space below
 
@@ -91,9 +91,9 @@ metrics = 'rbf' # kernel function
 n_clusters = 3 # number of clusters for k-means
 
 # parameter space for grid search
-params_shrinkage = [0] #, 0.01, 0.1]
-params_kernel = ['cov'] #, 'rbf', 'lwf', 'tyl', 'corr']
-params_n_clusters = range(3, 4) #, 10)
+params_shrinkage = [0, 0.01, 0.1]
+params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
+params_n_clusters = range(3, 10)
 
 # information on data
 upsampling_freq = 5 # frequency to which the data have been upsampled
@@ -137,7 +137,10 @@ def pipeline(X, y, id, session,
     ### Group by number of channels and segment into windows
     print("Preparing data")
     if use_missing_channels: 
-        grouping_indices = [[np.where(np.array(channels_tmp) == channel_no)[0]] for channel_no in set(channels_tmp)]
+        # Exclude data with too few channels
+        set_n_channels = np.unique(channels_tmp)
+        set_n_channels = set_n_channels[set_n_channels >= (exp_n_channels/2)]
+        grouping_indices = [[np.where(np.array(channels_tmp) == channel_no)[0]] for channel_no in set_n_channels]
     else:
         grouping_indices = [np.where(np.array(channels_tmp) == exp_n_channels)]
     windowsTransformer = ListTimeSeriesWindowTransformer(
@@ -184,7 +187,7 @@ def pipeline(X, y, id, session,
     ### Project matrices into common space
     if use_missing_channels:
         print('Projecting matrices into common space')
-        target_dim = np.min(np.unique(channels_tmp))
+        target_dim = np.min(set_n_channels)
         for in_channelgroup in range(len(X_prepared)):
             if X_prepared[in_channelgroup][0].shape[0] != target_dim:
                 X_prepared[in_channelgroup] = project_to_common_space(X_prepared[in_channelgroup], target_dim)
@@ -218,8 +221,7 @@ def pipeline(X, y, id, session,
         elif clustering == 'session-wise': 
             demean = False
             print("Warning: will not demean because clustering is session-wise.")
-    if demean: 
-        #TODO: Why does the Demeaner inflate the number of variables?
+    if demean and (len(np.unique(channels_common)) > 1): 
         demeaner = Demeaner(groups=groups,
                         activate=demean,
                         method=demeaner_method)
@@ -367,6 +369,8 @@ else:
     datapath = Path(path)  / "data" / "prepareddata"
 adpfs = "ageDPFs" if ageDPFs else "usual"
 outpath = Path(path) / "results" / adpfs / f"demean-{demeaner_method}"
+if use_missing_channels:
+    outpath = outpath / "use_missing_channels"
 if not outpath.is_dir():
     outpath.mkdir()
 
@@ -521,12 +525,12 @@ if grid_search:
     # That option leads to much longer runtimes and is therefore avoided here. 
 
     # Compute grid search parameters from inputs
-    #comb_shrinkage = product(params_shrinkage, repeat = exp_n_blocks)
-    #params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
-    params_shrinkage_combinations = params_shrinkage
-    #comb_kernel = product(params_kernel, repeat = exp_n_blocks)
-    #params_kernel_combinations = [list(x) for x in comb_kernel]
-    params_kernel_combinations = params_kernel
+    comb_shrinkage = product(params_shrinkage, repeat = exp_n_blocks)
+    params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
+    #params_shrinkage_combinations = params_shrinkage
+    comb_kernel = product(params_kernel, repeat = exp_n_blocks)
+    params_kernel_combinations = [list(x) for x in comb_kernel]
+    #params_kernel_combinations = params_kernel
     plot = 0 # do not plot during grid search
 
     scores = []
