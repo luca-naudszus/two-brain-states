@@ -1,0 +1,789 @@
+---
+title: "Analysis of brain states in real-world social interactions: fit to behavioral structure"
+author: "Luca A. Naudszus"
+date: "2025-03-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load packages
+library(emmeans)
+library(ggplot2)
+library(lme4)
+library(lmtest)
+library(MASS)
+library(purrr)
+library(reticulate)
+library(tidyverse)
+library(viridis)
+library(here)
+
+np <- import("numpy") # currently necessary for opening centroids, classes, and
+# matrices saved with numpy in Python
+
+theme_set(theme_light()+
+            theme(
+              plot.title = element_text(size=rel(1),face="bold"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.background = element_blank(),
+              axis.title = element_text(size=rel(1),face="bold"),
+              axis.text = element_text(size=rel(1),colour = 'black'),
+              strip.text = element_text(size=rel(1),colour = 'black', 
+                                        face = "bold"),
+              legend.text = element_text(size=rel(1)),
+              legend.title = element_text(size=rel(1),face="bold")))
+
+# Settings
+### USER INPUT ###
+type_of_data = "one-brain-3" # "one-brain-3", "one-brain-7", "four-blocks-3", or "four-blocks-7"
+combined = TRUE # in case of one brain data, investigation of single brain states is possible by setting combined to FALSE
+target = "duration" # "occurrence", "coverage", or "duration"
+### ---------- ###
+
+```
+
+## Custom functions
+```{r functions}
+# Build pattern key for a given state, task, and group
+build_key <- function(state, task, group) {
+  paste0("c-", state, "_task-", task, "_g-", group)
+}
+
+# Compute named contrast list for a given state
+make_contrasts_for_state <- function(state, patterns) {
+  get_pattern <- function(task, group) {
+    patterns[[build_key(state, task, group)]]
+  }
+
+  # Reusable pattern sets
+  tog_inter <- get_pattern("Together", "Intergen")
+  tog_same  <- get_pattern("Together", "Same gen")
+  alo_inter <- get_pattern("Alone", "Intergen")
+  alo_same  <- get_pattern("Alone", "Same gen")
+
+  # Define contrast formulas
+  contrast_list <- list(
+    (tog_inter + tog_same)/2 - (alo_inter + alo_same)/2,
+    tog_inter - alo_inter,
+    tog_same - alo_same,
+    (alo_inter + tog_inter)/2 - (alo_same + tog_same)/2,
+    tog_inter - tog_same,
+    alo_inter - alo_same
+  )
+
+  # Contrast names
+  contrast_names <- paste0("C", state, " ", c(
+    "Tog-Alo", "Tog-Alo Intergen", "Tog-Alo Same gen", 
+    "Int-Sam", "Int-Sam Together", "Int-Sam Alone"
+  ))
+
+  setNames(contrast_list, contrast_names)
+}
+
+# generate one-hot patterns for custom contrasts
+generate_pattern_matrix <- function(df, 
+                                    use_dyad_type = TRUE, 
+                                    selected_states = NULL) {
+  groups <- levels(df$group)
+  activities <- levels(df$task)
+  states <- if (!is.null(selected_states)) selected_states else levels(df$state)
+  
+  if (use_dyad_type) {
+    dyad_types <- levels(df$dyad_type)
+    combinations <- expand.grid(
+      state = states,
+      task = activities,
+      dyad_type = dyad_types, 
+      group = groups,
+      stringsAsFactors = FALSE
+    ) 
+    } else {
+      combinations <- expand.grid(
+        state = states,
+        task = activities,
+        group = groups,
+        stringsAsFactors = FALSE
+    )
+    }
+  
+  total_combinations <- nrow(combinations)
+  
+  if (use_dyad_type) {
+      patterns <- pmap(combinations, function(group, dyad_type, task, state) {
+      pattern <- rep(0, total_combinations)
+      idx <- which(combinations$group == group &
+                   combinations$dyad_type == dyad_type &
+                   combinations$task == task &
+                   combinations$state == state)
+      pattern[idx] <- 1
+      pattern
+    }) |> setNames(paste0(
+      "c-", combinations$state,
+      "_task-", combinations$task,
+      "_d-", combinations$dyad_type,
+      "_g-", combinations$group
+    )) 
+  } else {
+    patterns <- pmap(combinations, function(group, task, state) {
+      pattern <- rep(0, total_combinations)
+      idx <- which(combinations$group == group &
+                   combinations$task == task &
+                   combinations$state == state)
+      pattern[idx] <- 1
+      pattern
+    }) |> setNames(paste0(
+      "c-", combinations$state,
+      "_task-", combinations$task,
+      "_g-", combinations$group
+    )) 
+  }
+  
+  return(patterns)
+}
+
+# Get the latest file matching the pattern
+latest_file <- function(pattern) {
+  files <- list.files(clustering_path, pattern = pattern, full.names = TRUE)
+  if (length(files) == 0) return(NULL)
+  files[order(files)][[length(files)]]
+}
+
+# Create list of contrast expressions for states
+generate_contrast_list <- function(states) {
+  tasks <- c("Alone", "Together")
+  groups <- c("Intergen", "Same gen")
+
+  contrast_exprs <- list()
+
+  for (state in states) {
+    for (task in tasks) {
+      for (group in groups) {
+        label <- paste0("C", state, " ", task, " ", group)
+        key_pseudo <- paste0("c-", state, "_task-", 
+                             task, "_d-Pseudo_g-", group)
+        key_real   <- paste0("c-", state, "_task-", 
+                             task, "_d-Real_g-", group)
+
+        contrast_exprs[[label]] <- substitute(
+          patterns$PSEUDO - patterns$REAL,
+          list(PSEUDO = as.name(key_pseudo), REAL = as.name(key_real))
+        )
+      }
+    }
+  }
+
+  contrast_exprs
+}
+
+# Factorize and format state labels
+format_state_labels <- function(df, type_of_data) {
+  if (type_of_data %in% c("one-brain-3", "one-brain-5", "one_brain-7")) {
+    df <- df %>%
+      mutate(state = factor(state))
+    
+  } else if (type_of_data == "four-blocks-7") {
+    df <- df %>%
+      mutate(state = factor(case_when(
+        state == 1 ~ "F",
+        state == 2 ~ "D",
+        state == 3 ~ "G",
+        state == 4 ~ "A",
+        state == 5 ~ "E",
+        state == 6 ~ "B",
+        state == 7 ~ "C",
+        TRUE ~ "None"
+      )))
+    
+  } else if (type_of_data == "four-blocks-3") {
+    df <- df %>%
+      mutate(state = factor(case_when(
+        state == 1 ~ "B",
+        state == 2 ~ "A",
+        state == 3 ~ "C",
+        TRUE ~ "None"
+      )))
+  }
+  
+  return(df)
+}
+```
+## Load data
+
+```{r load_data}
+# checks and setup
+if (type_of_data %in% c("four-blocks-3", "four-blocks-7")) {
+  plotname = "two-brain-state"
+  if (!combined) {
+    stop("Single brain states cannot be investigated using four blocks data.")
+  } else {
+    suffix = ""
+    outpath = here("data", type_of_data)
+  }
+} else {
+  suffix = if (combined) "_combined" else "_single"
+  plotname = if (combined) "combined-brain-state" else "single-brain-state"
+  outpath = if (combined) 
+      here("data", paste0("plots_", type_of_data), "combined") 
+    else here("data", paste0("plots_", type_of_data), "single")
+}
+
+# load data
+datapath = here('data', 'time-series-features', type_of_data)
+fn_pattern <- paste0("feature-table_", type_of_data, suffix)
+if (!dir.exists(outpath)) {
+  dir.create(outpath, recursive = TRUE)
+}
+fn = dir(datapath, pattern = fn_pattern)[1]
+df = read.csv(file.path(datapath, fn)) 
+
+# set up data frame
+df$task[
+  df$task == "Together_1" | df$task == "Together_2"] = "Together"
+df <- df %>%
+  mutate(
+         task = factor(task),
+         dyad_type = factor(dyad_type),
+         group = factor(group), 
+         dyad = factor(dyad)
+        ) %>%
+  rename(target = eval(target)) %>%
+  mutate(target = round(target))
+
+# rename states in case of two-brain states
+df <- format_state_labels(df, type_of_data)
+```
+
+# Plot brain states
+
+```{r brainstates, message=FALSE}
+clustering_path = here('data', 'time-series-features', 'clustering', 
+                       type_of_data)
+fn_centroids <- latest_file(paste0("cluster-means_", type_of_data, "_"))
+centroids <- np$load(fn_centroids)
+fn_classes <- latest_file(paste0("classes_", type_of_data, "_"))
+classes <- np$load(fn_classes)
+fn_matrices <- latest_file(paste0("matrices_", type_of_data, "_"))
+matrices <- np$load(fn_matrices)
+
+if (type_of_data %in% c("one-brain-3", "one-brain-5", "one-brain-8")) {
+  channels <- c("lIFG", "lTPJ", "rIFG", "rTPJ")
+} else {
+  channels <- c("lIFG1", "lTPJ1", "rIFG1", "rTPJ1",
+                "lIFG2", "lTPJ2", "rIFG2", "rTPJ2")
+}
+exp_block_size <- length(channels)
+
+# ------------------------------------------------------------
+# Preprocess centroids
+centroids_hbo <- list()
+centroids_hbr <- list()
+
+for (i in 1:dim(centroids)[1]) {
+  c_hbo <- centroids[i, 1:exp_block_size, 1:exp_block_size]
+  c_hbr <- centroids[i, (exp_block_size + 1):(2 * exp_block_size), 
+                     (exp_block_size + 1):(2 * exp_block_size)]
+  
+  tril_hbo <- c_hbo
+  tril_hbo[upper.tri(tril_hbo, diag = TRUE)] <- NA
+  centroids_hbo[[i]] <- tril_hbo
+  
+  tril_hbr <- c_hbr
+  tril_hbr[upper.tri(tril_hbr, diag = TRUE)] <- NA
+  centroids_hbr[[i]] <- tril_hbr
+}
+
+centroids_list <- list(centroids_hbo, centroids_hbr)
+chromophores <- c("HbO", "HbR")
+
+df.mat <- map2_df(centroids_list, 1:2, function(mat_list, chromophore) {
+  map2_df(mat_list, 1:length(centroids_hbo), function(mat, state) {
+    colnames(mat) <- paste0("V", 1:ncol(mat))
+    
+    mat_df <- as_tibble(mat) %>%
+      mutate(row = row_number()) %>%
+      pivot_longer(-row, names_to = "col", values_to = "value") %>%
+      mutate(
+        col_index = as.integer(str_remove(col, "V")),
+        col = channels[col_index],
+        row = channels[row],
+        state = state,
+        chromophore = case_when(
+          chromophore == 1 ~ "HbO",
+          chromophore == 2 ~ "HbR"
+        )
+      )
+    mat_df$row <- factor(mat_df$row, levels = channels)
+    mat_df$col <- factor(mat_df$col, levels = channels)
+    mat_df
+  })
+})
+
+# rename states
+df.mat <- format_state_labels(df.mat, type_of_data)
+
+# plot states as heatmaps
+
+### USER INPUT ###
+set_chromophore = "HbR" # set to "HbO" or "HbR"
+### ---------- ###
+
+ggplot(df.mat[df.mat$chromophore == set_chromophore,], 
+       aes(x = col, y = row, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = round(value, 3)), color = "blue") +
+  scale_fill_gradient(low = "white", high = "red", breaks = c(0, 0.6),
+                      labels = c("lower", "higher"), 
+                      name = "Kernel estimate", guide = "none") +
+  scale_x_discrete(labels = channels, position = "top", 
+                   drop = FALSE, name = NULL) +
+  scale_y_discrete(labels = channels, drop = FALSE, name = NULL) +
+  facet_wrap(~ state, ncol = 4)
+ggsave(file.path(here("data", "time-series-features", "clustering", 
+                      type_of_data, paste0(type_of_data, "_centroids")),
+                 paste0("centroids_", type_of_data, "_",
+                       set_chromophore, ".png")), 
+       width = 16, height = 5, dpi = 400)
+```
+
+
+# Sessions combined
+
+### Model
+
+```{r fit, echo = FALSE}
+# define model
+model <- 'target ~ state*task*dyad_type*group*session'
+
+# fit models
+poisson_fit = glm(model, data = df, family = poisson(link = "log"))
+nb_fit = glm.nb(model, data = df)
+
+# check for overdispersion
+dispersion <- sum(residuals(
+  poisson_fit, type = "pearson")^2) / poisson_fit$df.residual
+dispersion
+
+# compare models using AIC
+AIC(poisson_fit, nb_fit)
+lrtest <- lrtest(poisson_fit, nb_fit)
+if (lrtest$`Pr(>Chisq)`[2] < .05) {
+ fit <- nb_fit 
+ vartype = "response"
+} else {
+  fit <- poisson_fit
+  vartype = "rate"
+}
+
+# get Likelihood Ratio Test
+anova(fit)
+```
+
+### Contrasts
+
+```{r contrasts, message=FALSE}
+# Get all estimated means in data frame
+emm1 <- emmeans(fit, specs=~state*task*dyad_type*group, data=df, 
+                type="response") 
+df.emm1 <- emm1 %>% as_tibble() 
+df.emm1 <- df.emm1 %>% rename(var = vartype)
+df$state <- factor(df$state)
+
+# Custom contrasts
+patterns <- generate_pattern_matrix(df.emm1)
+states <- levels(df$state)
+method_list = generate_contrast_list(states)
+list_states = rep(states, each=4)
+list_tasks = rep(c("Alone", "Alone", "Together", "Together"), 
+                 length(states))
+list_groups = rep(c("Intergen", "Same gen"), length(states)*2)
+
+df.contrasts1 <- contrast(emm1, method = method_list) %>% 
+  as_tibble()
+df.contrasts1$state <- list_states
+df.contrasts1$task <- list_tasks
+df.contrasts1$group <- list_groups
+df.contrasts1 <- df.contrasts1 %>%
+  mutate(sig = p.value < .05,
+         state = factor(state), 
+         task = factor(task),
+         group = factor(group)
+         )
+frames <- df.contrasts1 %>%
+  mutate(state.int = as.integer(state),
+         act.int = as.integer(task)) %>%
+  filter(sig) 
+
+# Plot heat map
+breaks = c((min(df.emm1$var) + 0.001), (max(df.emm1$var)-0.001))
+ggplot(df.emm1, aes(x=state, y=task, fill=var)) +
+  geom_tile() +
+  scale_fill_viridis(option="magma", breaks=breaks, labels=c("lower", "higher"), 
+                     name="estimated mean") +
+  facet_grid(dyad_type~group) +
+    theme(legend.position = "left", 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+# Plot contrasts heat map
+breaks_con = c((min(df.contrasts1$ratio) + 0.001), 
+               (max(df.contrasts1$ratio)-0.001))
+ggplot() + 
+  geom_tile(data = df.contrasts1, aes(x=state, y=task, fill=ratio), 
+            alpha = 0.9) + 
+  geom_text(data = df.contrasts1, aes(x=state, y=task, 
+                                      label = round(ratio, digits = 3), 
+                                      angle = 270), color = "white") + 
+  scale_fill_viridis(option="cividis", breaks=breaks_con, 
+                     labels=c("more frequent in real dyads", 
+                              "more frequent in pseudo dyads"), 
+                     name = "Odd's Ratio") + 
+  facet_grid(~group) + 
+  geom_rect(data=frames, inherit.aes = T, 
+            aes(xmin=state.int - 0.5, xmax = state.int + 0.5, 
+                ymin = act.int - 0.5, ymax = act.int + 0.5, color = sig), 
+            linewidth = 1, fill = NA) + 
+  scale_color_manual(values = c("black", NA), 
+                     labels = "significant", name = NULL) + 
+  labs(x=NULL, y=NULL, 
+       title="Difference pseudo vs. real dyads: sessions combined") + 
+  theme(legend.position = "left", 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+```
+
+
+```{r model2, message = FALSE}
+# Selected states are based on previous analyses of the data and refer to 
+# those states which displayed a significant difference between real and pseudo
+# dyads. 
+selected_states <- unique(df.contrasts1$state[df.contrasts1$sig])
+df.selected <- df[df$dyad_type == "Real" & (df$state %in% selected_states),]
+
+# define model
+error_flag = FALSE
+if (length(selected_states) > 1) {
+  model2 <- 'target ~ state*task*group'
+} else if (length(selected_states) == 1) {
+  model2 <- 'target ~ task*group'
+} else {
+  error_flag = TRUE
+  stop("No states have been flagged to differ significantly between real and 
+       pseudo dyads and no models can be calculated. Please check section above.")
+}
+
+# fit models
+poisson_fit2 = glm(model2, data = df.selected, family = poisson(link = "log"))
+nb_fit2 = glm.nb(model2, data = df.selected)
+
+# check for overdispersion
+dispersion <- sum(residuals(
+  poisson_fit2, type = "pearson")^2) / poisson_fit2$df.residual
+dispersion
+
+# compare models using AIC
+AIC(poisson_fit2, nb_fit2)
+lrtest2 <- lrtest(poisson_fit2, nb_fit2)
+if (lrtest2$`Pr(>Chisq)`[2] < .05) {
+  fit2 <- nb_fit2
+  vartype = "response"
+} else {
+  fit2 <- poisson_fit2
+  vartype = "rate"
+}
+
+# get Likelihood Ratio Test
+anova(fit2)
+### ---------- ###
+```
+
+
+```{r carryforward1, message=FALSE}
+if (error_flag) { 
+  stop("No states have been flagged to differ significantly between real and 
+       pseudo dyads and no models can be calculated. Please check section above.")
+}
+error_flag = FALSE
+if (length(selected_states) > 1) {
+  emm2 <- emmeans(fit2, specs=~state*task*group, data=df.selected, 
+                  type="response") 
+} else {
+  emm2 <- emmeans(fit2, specs=~task*group, data=df.selected, 
+                  type="response") 
+}
+df.emm2 <- emm2 %>% as_tibble() 
+df.emm2 <- df.emm2 %>% rename(var = eval(vartype))
+
+# Custom contrasts
+patterns <- generate_pattern_matrix(df.emm2, 
+                                    use_dyad_type = FALSE, 
+                                    selected_states = selected_states)
+contrast_lists <- lapply(selected_states, make_contrasts_for_state, 
+                         patterns = patterns)
+names(contrast_lists) <- selected_states
+all_contrasts <- do.call(c, contrast_lists)
+
+df.contrasts2 <- contrast(emm2, method = all_contrasts, adjust = "fdr") %>% 
+  as_tibble()
+df.contrasts2$state <- rep(selected_states, each = 6)
+df.contrasts2$contrast <- rep(c("Tog-Alo", "Tog-Alo Intergen", "Tog-Alo Same gen", 
+                                "Int-Sam", "Int-Sam Together", "Int-Sam Alone"), 
+                              times = length(selected_states))
+df.contrasts2 <- df.contrasts2 %>%
+  mutate(sig = factor(p.value < .05, levels=c(T, F)),
+         state = factor(state)
+         )
+
+# Plot dot map
+ggplot() + 
+  geom_point(data = df.contrasts2, aes(x=contrast, y=ratio, color=contrast, 
+                                       fill=contrast, alpha = sig), 
+             size = 4) + 
+  ### USER INPUT ###
+  # You can vary the y scale for better readable plots.
+  #  scale_y_continuous(limits=c(0, 2)) + 
+  ### ---------- ###
+  scale_alpha_manual(limits = c(T, F), values = c(1, 0.1), 
+                     labels=c("p < .05", "n.s."), name=NULL, drop = FALSE) +
+  geom_linerange(data = df.contrasts2, aes(x=contrast, ymax = ratio+SE, 
+                                           ymin = ratio-SE, color=contrast)) + 
+  labs(x=NULL, y=NULL, title="Sessions combined") + 
+  theme(legend.position = "left", 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) + 
+  geom_hline(yintercept=1, linetype='dotted', col = 'grey') +
+  geom_vline(xintercept = 3.5, linetype='dotted', col = 'grey') +
+  facet_grid(~state)
+```
+
+```{r plot_one_state-means, message=FALSE}
+### USER INPUT ###
+# This section can plot the estimated means for one specific state. 
+set_state = "1_1"
+### ---------- ###
+
+df_onestate <- df.emm1[df.emm1$state == set_state & df.emm1$dyad_type == "Real",]
+ggplot(df_onestate, aes(x=group, y=task, fill=var)) +
+  geom_tile() +
+  geom_text(data = df_onestate, aes(x=group, y=task, label = round(var, digits = 1)), 
+            color = "black") + 
+  scale_fill_gradient(low="white", high="red", breaks = c(0, 60), 
+                      labels=c("lower", "higher"), name="estimated mean") +
+  theme(legend.position = "left", 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+ggsave(file.path(here(outpath, "sessions-combined", target), 
+                 paste0(set_state, "_tiles.png")), 
+       width = 5, height = 5)
+```
+
+```{r plot_one_state-contrasts, message=FALSE}
+### USER INPUT ###
+# This section can plot the contrasts for one specific state. 
+set_state == "G"
+set_contrast = "int_sam" # "int_sam" or "tog_alo"
+### ---------- ###
+
+switch(set_contrast,
+       "int_sam"  = {
+         which_contrasts = c("Int-Sam", "Int-Sam Alone", "Int-Sam Together") 
+       },
+       "tog_alo" = {
+         which_contrasts = c("Tog-Alo", "Tog-Alo Intergen", "Tog-Alo Same gen")
+       })
+
+df_onecontrast <- df.contrasts2[
+  df.contrasts2$state == set_state & df.contrasts2$contrast %in% which_contrasts,]
+ggplot() + 
+  geom_linerange(data = df_onecontrast, aes(x=contrast, ymax = ratio+SE,
+                                            ymin = ratio-SE, color=contrast)) + 
+  geom_point(data = df_onecontrast, aes(x=contrast, y=ratio, color=contrast, 
+                                        fill=contrast, alpha = significant), 
+             size = 4) + 
+  ### USER INPUT ###
+  # You can vary the y scale for better readable plots.
+  #  scale_y_continuous(limits=c(0, 2)) + 
+  ### ---------- ###
+  scale_alpha_manual(limits = c(T, F), values = c(1, 0.1), 
+                     labels=c("p < .05", "n.s."), name=NULL, drop = FALSE) +
+  labs(x=NULL, y=NULL, title="Sessions combined") + 
+  ylim(0.5, 2) + 
+  theme(legend.position = "left", 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) + 
+  geom_hline(yintercept=1, linetype='dotted', col = 'grey')
+#  geom_vline(xintercept = 3.5, linetype='dotted', col = 'grey')
+ggsave(file.path(here(outpath, "sessions-combined", target), 
+                 paste0(set_state, "_", target, "_", set_contrast, ".jpg")), 
+       width = 4, height = 4)
+```
+
+# Across sessions
+
+### Contrasts
+
+```{r contrasts2, message=FALSE}
+# Get all estimated means in data frame
+error_flag = FALSE
+emm3 <- emtrends(fit, specs=~state*task*dyad_type*group, var="session", 
+                 data=df, type="response") 
+df.emm3 <- emm3 %>% as_tibble()
+
+# Contrasting pseudo vs. real
+patterns <- generate_pattern_matrix(df.emm3)
+method_list = generate_contrast_list(states)
+list_states = rep(states, each=4)
+list_tasks = rep(c("Alone", "Alone", "Together", "Together"), 
+                 length(states))
+list_groups = rep(c("Intergen", "Same gen"), length(states)*2)
+
+df.contrasts3 <- contrast(emm3, method = method_list, adjust = "fdr") %>% 
+  as_tibble()
+df.contrasts3$state <- list_states
+df.contrasts3$task <- list_tasks
+df.contrasts3$group <- list_groups
+df.contrasts3 <- df.contrasts3 %>%
+  mutate(sig = p.value < .05,
+         state = factor(state), 
+         task = factor(task),
+         group = factor(group)
+         )
+frames <- df.contrasts3 %>%
+  mutate(state.int = as.integer(state),
+         act.int = as.integer(task)) %>%
+  filter(sig)
+
+# Plot heat map
+breaks = c((min(df.emm3$session.trend) + 0.001), 
+           (max(df.emm3$session.trend)-0.001))
+ggplot(df.emm3, aes(x=state, y=task, fill=session.trend)) +
+  geom_tile() +
+  scale_fill_viridis(option="magma", breaks=breaks, 
+                     labels=c("lower", "higher")) +
+  facet_grid(dyad_type~group) 
+
+# Plot contrasts heat map
+breaks_con = c((min(df.contrasts3$estimate) + 0.001), 
+               (max(df.contrasts3$estimate)-0.001))
+ggplot() + 
+  geom_tile(data = df.contrasts3, aes(x=state, y=task, fill=estimate), 
+            alpha = 0.9) + 
+  geom_text(data = df.contrasts3, aes(x=state, y=task, 
+                                      label = round(estimate, digits = 3), 
+                                      angle = 270), color = "white") + 
+  scale_fill_viridis(option="cividis", breaks=breaks_con, 
+                     labels=c("more frequent in real dyads", 
+                              "more frequent in pseudo dyads"), 
+                     name = "Odd's Ratio") + 
+  facet_grid(~group) + 
+  geom_rect(data=frames, inherit.aes = T, 
+            aes(xmin=state.int - 0.5, xmax = state.int + 0.5, 
+                ymin = act.int - 0.5, ymax = act.int + 0.5, color = sig), 
+            linewidth = 1, fill = NA) + 
+  scale_color_manual(values = c("black", NA), 
+                     labels = "significant", name = NULL) + 
+  labs(x=NULL, y=NULL, 
+       title="Difference pseudo vs. real dyads: across sessions") + 
+  theme(legend.position = "left", 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+```
+
+```{r model3, message=FALSE}
+# Selected states are based on previous analyses of the data and refer to 
+# those states which displayed a significant difference between real and pseudo
+# dyads. 
+selected_states <- unique(df.contrasts3$state[df.contrasts3$sig])
+df.selected <- df[df$dyad_type == "Real" & (df$state %in% selected_states),]
+
+# define model
+if (length(selected_states) > 1) {
+  model3 <- 'target ~ state*task*group'
+} else if (length(selected_states) == 1) {
+  model3 <- 'target ~ task*group'
+} else {
+  error_flag = TRUE
+  stop("No states have been flagged to differ significantly between real and 
+       pseudo dyads and no models can be calculated. Please check section above.")
+}
+
+# fit models
+poisson_fit3 = glm(model3, data = df.selected, family = poisson(link = "log"))
+nb_fit3 = glm.nb(model3, data = df.selected)
+
+# check for overdispersion
+dispersion <- sum(residuals(
+  poisson_fit3, type = "pearson")^2) / poisson_fit3$df.residual
+dispersion
+
+# compare models using AIC
+AIC(poisson_fit3, nb_fit3)
+lrtest3 <- lrtest(poisson_fit3, nb_fit3)
+if (lrtest3$`Pr(>Chisq)`[2] < .05) {
+  fit3 <- nb_fit3
+  vartype = "response"
+} else {
+  fit3 <- poisson_fit3 
+  vartype = "rate"
+}
+
+# get Likelihood Ratio Test
+anova(fit3)
+```
+
+
+```{r carryforward2, message=FALSE}
+# Carrying contrasts forward
+if (error_flag) {
+  stop("No states have been flagged to differ significantly between real and 
+       pseudo dyads and no models can be calculated. Please check section above.")
+}
+if (length(selected_states) > 1) {
+  emm4 <- emtrends(fit3, specs=~state*task*group, data=df.selected, 
+                   var="session", type="response") 
+} else {
+  emm4 <- emtrends(fit3, specs=~task*group, data=df.selected, 
+                   var="session", type="response") 
+}
+df.emm4 <- emm4 %>% as_tibble() 
+
+# custom contrasts
+patterns <- generate_pattern_matrix(df.emm4, 
+                                    use_dyad_type = FALSE,
+                                    selected_states = selected_states)
+contrast_lists <- lapply(selected_states, make_contrasts_for_state, 
+                           patterns = patterns)
+names(contrast_lists) <- selected_states
+all_contrasts <- do.call(c, contrast_lists)
+
+df.contrasts4 <- contrast(emm4, method = all_contrasts, adjust = "fdr") %>% 
+    as_tibble()
+df.contrasts4$state <- rep(selected_states, each = 6)
+df.contrasts4$contrast <- rep(c("Tog-Alo", "Tog-Alo Intergen", 
+                                  "Tog-Alo Same gen", "Int-Sam", 
+                                  "Int-Sam Together", "Int-Sam Alone"), 
+                                times = length(selected_states))
+df.contrasts4 <- df.contrasts4 %>%
+    mutate(sig = factor(p.value < .05, levels=c(T, F)),
+           state = factor(state)
+           )
+
+# Plot dot map
+ggplot() + 
+  geom_point(data = df.contrasts4, 
+             aes(x=contrast, y=estimate, color=contrast, 
+                 fill=contrast, alpha=sig), size = 4) + 
+  ### USER INPUT ###
+  # You can vary the y scale for better readable plots.
+  #  scale_y_continuous(limits=c(0, 2)) + 
+  ### ---------- ###
+  scale_alpha_manual(limits = c(T, F), values = c(1, 0.1), 
+                     labels=c("p < .05", "n.s."), name=NULL, drop = FALSE) +
+  geom_linerange(data = df.contrasts4, 
+                 aes(x=contrast, ymax = estimate+SE, 
+                     ymin = estimate-SE, color=contrast)) + 
+  labs(x=NULL, y=NULL, title="Across sessions") + 
+  theme(legend.position = "left", 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) + 
+  geom_hline(yintercept=0, linetype='dotted', col = 'grey') +
+  geom_vline(xintercept = 3.5, linetype='dotted', col = 'grey') +
+  facet_grid(~state)
+```
