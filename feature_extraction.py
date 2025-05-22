@@ -1,5 +1,9 @@
-# Author: Luca A. Naudszus, Social Brain Sciences, ETH Zurich
-# Date: 11 March 2025
+# Extracting features from brain state sequence time series
+
+#**Author:** Luca A. Naudszus
+#**Date:** 11 March 2025
+#**Affiliation:** Social Brain Sciences Lab, ETH Zürich
+#**Email:** luca.naudszus@gess.ethz.ch
 
 # ------------------------------------------------------------
 # Import packages and custom functions
@@ -16,12 +20,8 @@ from riemannianKMeans import pseudodyads
 
 # ------------------------------------------------------------
 # Set variables
-
-path = '/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/analysis'
-type_of_data = "four_blocks"
-ageDPFs = False
-demean = "false"
-
+path = '/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/analysis/data/time-series-features'
+type_of_data = "one-brain-3" # "one-brain-3", "one-brain-8", "four-blocks-3" or "four-blocks-7"
 
 # ------------------------------------------------------------
 # Custom functions
@@ -46,30 +46,32 @@ def make_counter(arr, is_tuple=False):
 
 # ------------------------------------------------------------
 # Load Data
-adpfs = "ageDPFs" if ageDPFs else "usual"
-outpath = Path(path) / "results" / adpfs / f"demean-{demean}"
-
-fn = sorted(list(outpath.glob(f"results_table_{type_of_data}_*")))[-1]
+datapath = Path(path) / "clustering" / type_of_data
+outpath = Path(path) / type_of_data
+if not outpath.is_dir():
+    outpath.mkdir()
+fn = sorted(list(datapath.glob(f"results-table_{type_of_data}_*")))[-1]
 results_table = pd.read_csv(fn)
+results_table.columns = ["classes", "tasks", "sessions", "ids"]
 
 # ------------------------------------------------------------
 # Calculate coverage
-coverage_table, coverage_table_single, entropy_table, entropy_table_single = [], [], [], []
-sorted_activities = sorted(set(results_table.activities))
-if type_of_data == "one_brain": 
-    true_dyads = pd.read_csv(Path(path) / "data" / "dyadList.csv")
+feature_table, feature_table_single, entropy_table, entropy_table_single = [], [], [], []
+sorted_tasks = sorted(set(results_table.tasks))
+if "one-brain" in type_of_data: 
+    true_dyads = pd.read_csv(Path(path) / "clustering" / "fNIRS_prepared" / "additional_information" / "dyadList.csv")
     dyads = pseudodyads(true_dyads) 
     for i, row in dyads.iterrows(): 
-        #TODO: Why do some IDs only appear in targetID and not in partnerID?
-        targetID, partnerID, dyadType, dyadID, group = row['pID1'], row['pID2'], row['dyadType'], row['dyadID'], row['group']
+        targetID, partnerID, dyad_type, dyadID, group = row['pID1'], row['pID2'], row['dyad_type'], row['dyadID'], row['group']
+        dyad_type_formatted = "Real" if dyad_type else "Pseudo"
         for session in range(6):
-            for activity in sorted_activities:
-                session_activity_df = results_table[
-                    (results_table.activities == activity) & 
+            for task in sorted_tasks:
+                session_task_df = results_table[
+                    (results_table.tasks == task) & 
                     (results_table.sessions == session)
                 ]
-                target = session_activity_df.loc[session_activity_df.ids == targetID, "classes"]
-                partner = session_activity_df.loc[session_activity_df.ids == partnerID, "classes"]
+                target = session_task_df.loc[session_task_df.ids == targetID, "classes"]
+                partner = session_task_df.loc[session_task_df.ids == partnerID, "classes"]
                 if not (target.empty or partner.empty): 
                     classes = np.stack((target + 1, partner + 1), axis=1)
                     n = len(classes)
@@ -79,32 +81,32 @@ if type_of_data == "one_brain":
                         ### coverage
                         coverage = np.sum((classes[:, 0] == c1) & (classes[:, 1] == c2))
                         if coverage != 0: 
-                            ### stability (mean duration a given microstate remains stable, i.e. occurs consecutively)
-                            stability = np.mean(classes_counter[(c1, c2)])
+                            ### duration (mean duration a given microstate remains stable, i.e. occurs consecutively)
+                            duration = np.mean(classes_counter[(c1, c2)])
                             ### occurrence (mean number of times a microstate occurred during a one second period)
                             occurrence = len(classes_counter[(c1, c2)])
                         else: 
-                            stability = np.nan
+                            duration = np.nan
                             occurrence = 0
                         pk += [coverage/n]
-                        coverage_table.append([
-                            coverage, stability, occurrence, dyadID, dyadType, group, session + 1, activity,
+                        feature_table.append([
+                            coverage, duration, occurrence, dyadID, dyad_type_formatted, group, session + 1, task,
                                 f"{c1}_{c2}", n           
                             ])
                     entropy = sp.stats.entropy(pk)
                     entropy_table.append([
-                        entropy, dyadID, dyadType, group, session + 1, activity
+                        entropy, dyadID, dyad_type_formatted, group, session + 1, task
                     ])
-        if dyadType: 
+        if dyad_type: 
             for session in range(6):
-                for activity in sorted_activities:
+                for task in sorted_tasks:
                     target = results_table.classes[
-                                (results_table.activities == activity) & 
+                                (results_table.tasks == task) & 
                                 (results_table.sessions == session) & 
                                 (results_table.ids == targetID)]
                     target_counter = make_counter(target)
                     partner = results_table.classes[
-                                (results_table.activities == activity) & 
+                                (results_table.tasks == task) & 
                                 (results_table.sessions == session) & 
                                 (results_table.ids == partnerID)]
                     partner_counter = make_counter(partner)
@@ -115,18 +117,18 @@ if type_of_data == "one_brain":
                             cov_ct = np.sum(target == class_t) 
                             group_t = "young" if targetID < 300 else "old"
                             if cov_ct != 0:
-                                stability_ct = np.mean(target_counter[class_t])
+                                duration_ct = np.mean(target_counter[class_t])
                                 occurrence_ct = len(target_counter[class_t])
                             else: 
-                                stability_ct = np.nan
+                                duration_ct = np.nan
                                 occurrence_ct = 0
                             pk_ct += [cov_ct/n_t]
-                            coverage_table_single.append(
-                                [cov_ct, stability_ct, occurrence_ct, targetID, group_t, session + 1, activity, class_t + 1, n_t]
+                            feature_table_single.append(
+                                [cov_ct, duration_ct, occurrence_ct, targetID, group_t, session + 1, task, class_t + 1, n_t]
                             )
                         entropy_ct = sp.stats.entropy(pk_ct)
                         entropy_table_single.append([
-                            entropy_ct, targetID, group_t, session + 1, activity
+                            entropy_ct, targetID, group_t, session + 1, task
                         ])
                     for class_p in np.unique(partner):
                         n_p = len(partner)
@@ -135,85 +137,83 @@ if type_of_data == "one_brain":
                             cov_cp = np.sum(partner == class_p)
                             group_p = "young" if partnerID < 300 else "old"
                             if cov_cp != 0:
-                                stability_cp = np.mean(partner_counter[class_p])
+                                duration_cp = np.mean(partner_counter[class_p])
                                 occurrence_cp = len(partner_counter[class_p])
                             else: 
-                                stability_cp = np.nan
+                                duration_cp = np.nan
                                 occurrence_cp = 0
                             pk_cp = [cov_cp/n_p]
-                            coverage_table_single.append([
-                                cov_cp, stability_cp, occurrence_cp, partnerID, group_p, session + 1, activity, class_p + 1, n_p
+                            feature_table_single.append([
+                                cov_cp, duration_cp, occurrence_cp, partnerID, group_p, session + 1, task, class_p + 1, n_p
                             ])
                         entropy_cp = sp.stats.entropy(pk_cp)
                         entropy_table_single.append([
-                            entropy_cp, partnerID, group_p, session + 1, activity
+                            entropy_cp, partnerID, group_p, session + 1, task
                         ])
 
-else: 
+elif "four-blocks" in type_of_data: 
     for id in sorted(set(results_table.ids)):
-        #TODO: Make pseudo dyads have a group. 
         if (len(str(id)) == 4): 
-            dyadType = True
-            if str(id).startswith("1"): 
-                group = "Same gen"
-            else:
-                group = "Intergen"
-        else:
-            dyadType = False
-            group = "None"
+            dyad_type = "Real"
+            group = "Same gen" if str(id).startswith("1") else "Intergen"
+
+        else: 
+            dyad_type = "Pseudo"
+            group = "Same gen" if (id[:3] < 300) and (id[-3:] < 300) else "Intergen"
+
         for session in sorted(set(results_table.sessions)):
-            for activity in sorted_activities:
+            for task in sorted_tasks:
                 n_total = len(results_table[
-                            (results_table.activities == activity) & 
+                            (results_table.tasks == task) & 
                             (results_table.sessions == session) & 
                             (results_table.ids == id)])
                 if n_total > 0:
                     classes = results_table.classes[
-                            (results_table.activities == activity) & 
+                            (results_table.tasks == task) & 
                             (results_table.sessions == session) & 
                             (results_table.ids == id)]
                     classes_counter = make_counter(classes)
                     pk = []
-                    for cluster in sorted(set(classes)):          
+                    for state in sorted(set(classes)):          
                         coverage = len(results_table[
-                            (results_table.classes == cluster) & 
-                            (results_table.activities == activity) & 
+                            (results_table.classes == state) & 
+                            (results_table.tasks == task) & 
                             (results_table.sessions == session) & 
                             (results_table.ids == id)])
                         if coverage != 0:
-                            stability = np.mean(classes_counter[cluster])
-                            occurrence = len(classes_counter[cluster])
+                            duration = np.mean(classes_counter[state])
+                            occurrence = len(classes_counter[state])
                         else: 
-                            stability = np.nan
+                            duration = np.nan
                             occurrence = 0
                         pk += [coverage/n_total]
-                        coverage_table.append(
-                            [coverage, stability, occurrence, id, dyadType, group, session + 1, activity, cluster + 1, n_total]
+                        feature_table.append(
+                            [coverage, duration, occurrence, id, dyad_type, group, session + 1, task, state + 1, n_total]
                         )
                     entropy = sp.stats.entropy(pk)
                     entropy_table.append([
-                        coverage, id, dyadType, group, session + 1, activity       
+                        coverage, id, dyad_type, group, session + 1, task       
                     ])
 
-coverage_table = pd.DataFrame(coverage_table, 
-             columns = ['coverage', 'stability', 'occurrence', 'id', 'dyadType', 'group', 'session', 'activity', 'cluster', 'n'])
+feature_table = pd.DataFrame(feature_table, 
+             columns = ['coverage', 'duration', 'occurrence', 'dyad', 'dyad_type', 'group', 'session', 'task', 'state', 'n'])
 entropy_table = pd.DataFrame(entropy_table,
-                             columns = ['entropy', 'id', 'dyadType', 'group', 'session', 'activity'])
-if type_of_data == "one_brain":
-    coverage_table_single = pd.DataFrame(coverage_table_single,
-                                         columns= ['coverage', 'stability', 'occurrence', 'id', 'group', 'session', 'activity', 'cluster', 'n'])
+                             columns = ['entropy', 'dyad', 'dyad_type', 'group', 'session', 'task'])
+if "one-brain" in type_of_data: 
+    feature_table_single = pd.DataFrame(feature_table_single,
+                                         columns= ['coverage', 'duration', 'occurrence', 'id', 'group', 'session', 'task', 'state', 'n'])
     entropy_table_single = pd.DataFrame(entropy_table_single,
-                                         columns= ['entropy', 'id', 'group', 'session', 'activity'])
+                                         columns= ['entropy', 'id', 'group', 'session', 'task'])
 
 # ------------------------------------------------------------
 ### Save results. 
 
-if type_of_data == "one_brain":
-    coverage_table.to_csv((outpath / f"coverage_table_{type_of_data}_shared.csv"), index=False)
-    coverage_table_single.to_csv((outpath / f"coverage_table_{type_of_data}_single.csv"), index=False)
-    entropy_table.to_csv((outpath / f"entropy_table_{type_of_data}_shared.csv"), index=False)
-    entropy_table_single.to_csv((outpath / f"entropy_table_{type_of_data}_single.csv"), index=False)
+if "one-brain" in type_of_data: 
+    feature_table.to_csv((outpath / f"feature-table_{type_of_data}_combined.csv"), index=False)
+    feature_table_single.to_csv((outpath / f"feature-table_{type_of_data}_single.csv"), index=False)
+    entropy_table.to_csv((outpath / f"entropy-table_{type_of_data}_combined.csv"), index=False)
+    entropy_table_single.to_csv((outpath / f"entropy-table_{type_of_data}_single.csv"), index=False)
 else: 
-    coverage_table.to_csv((outpath / f"coverage_table_{type_of_data}.csv"), index=False)
-    entropy_table.to_csv((outpath / f"entropy_table_{type_of_data}.csv"), index=False)
+    feature_table.to_csv((outpath / f"feature-table_{type_of_data}.csv"), index=False)
+    entropy_table.to_csv((outpath / f"entropy-table_{type_of_data}.csv"), index=False)
     

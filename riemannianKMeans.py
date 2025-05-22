@@ -5,6 +5,7 @@
 from joblib import Parallel, delayed
 #---
 from itertools import combinations
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import random
@@ -20,6 +21,7 @@ from pyriemann.utils.base import expm, invsqrtm, logm, sqrtm
 from pyriemann.utils.covariance import cov_est_functions
 from pyriemann.utils.distance import distance_riemann, distance_wasserstein, pairwise_distance
 from pyriemann.utils.mean import mean_riemann
+from pyriemann.utils.tangentspace import tangent_space
 from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
@@ -34,7 +36,7 @@ max_iter = 5 # maximum number of iterations
 random_state = 42
 ker_est_functions = [
     "linear", "poly", "polynomial", "rbf", "laplacian", "cosine"
-]
+] # addition to pyriemann, probably not important
 
 # ------------------------------------------------------------
 # define custom classes and functions
@@ -455,21 +457,18 @@ def riemannian_silhouette_score(matrices, labels, n_jobs = n_jobs, distance=dist
 
     print(f"SilhouetteScore: Processing stratified sample of {n_matrices} data points")
     
-    # (3) Parallel execution of distance calculation
-    #TODO: Ensure execution is parallel
     pairwise_distances_matrix = pairwise_distance(stratified_matrices, metric=distance)
 
-    # (5) Calculate silhouette score
     score = silhouette_score(pairwise_distances_matrix, stratified_labels, metric='precomputed')
     return score
 
 def ch_score(matrices, labels):
-    # (1) Extract and transform matrices
+    # Extract and transform matrices
     flattener = FlattenTransformer()
     flattener.fit(matrices)
     matrices = flattener.transform(matrices)
     
-    # (2) Calculate Calinski-Harabasz score
+    # Calculate Calinski-Harabasz score
     score = calinski_harabasz_score(matrices, labels)
     return score
 
@@ -536,7 +535,7 @@ def project_to_spd(matrix):
     """
     eigvals, eigvecs = np.linalg.eigh(matrix)
     eigvals = np.maximum(eigvals, 1e-6)  # Ensure SPD by making all eigenvalues positive
-    #TODO: Find out why the result is not always SPD. 
+    #TODO: Result is not always SPD. 
     return eigvecs @ np.diag(eigvals) @ eigvecs.T
 
 def euclidean_centering_with_projection(spd_matrices):
@@ -563,10 +562,10 @@ def airm_centering(spd_matrices):
     and maps back to SPD space. This respects the curved geometry of the SPD manifold. 
 
     Parameters:
-        spd_matrices: List of SPD matrices of shape (n_matrices, d, d).
+        spd_matrices: list of (n, n) SPD matrices.
 
     Returns:
-        np.array: Centered SPD matrices of shape (n_matrices, target_dim, target_dim).
+        np.array: Centered SPD matrices.
     """
     n_matrices = len(spd_matrices)
     # Compute the matrix square root and its inverse of the Riemannian mean
@@ -586,10 +585,10 @@ def log_euclidean_centering(spd_matrices):
     In log-Euclidean framework, centering is well-defined. This does not respect the curved geometry of the SPD manifold.
 
     Parameters:
-        spd_matrices (list of np.array): List of SPD matrices of shape (n_matrices, d, d).
+        spd_matrices: list of (n, n) SPD matrices.
     
     Returns:
-        np.array: Centered SPD matrices of shape (n_matrices, target_dim, target_dim).
+        np.array: Centered SPD matrices.
     """
     # compute logarithm of mean matrix
     reference = mean_riemann(spd_matrices)
@@ -607,11 +606,11 @@ def project_to_common_space(matrices, target_dim):
     Projects SPD matrices to a lower-dimensional common space using principal subspace projection.
     
     Parameters:
-        cov_matrices (list of np.array): List of SPD matrices of shape (n_matrices, d, d).
-        target_dim (int): Target dimension for projection.
+        cov_matrices: list of (n, n) SPD matrices.
+        target_dim: Target dimension for projection.
     
     Returns:
-        np.array: Projected SPD matrices of shape (n_matrices, target_dim, target_dim).
+        np.array: Centered SPD matrices.
     """
     d = matrices[0].shape[0]  # original dimension
     n_matrices = len(matrices)
@@ -640,6 +639,17 @@ def project_to_common_space(matrices, target_dim):
     return np.array(projected_matrices)
 
 def pseudodyads(true_dyads, sample=0.1):
+    """
+    Creates pseudo dyads. 
+    
+    Parameters:
+        true_dyads: List of true dyads with two columns, pID1 and pID2. 
+        sample: Share of pseudo dyads to be generated. Sample will be stratified. 
+    
+    Returns:
+        pd.DataFrame: Pseudo dyads with columns pID1, pID2, dyad_type (Real / Pseudo), dyadID, and group (Intergen / Same gen). 
+        column dyadID contains the true ID in case of real dyads and a concatenation of IDs in case of pseudo dyads. 
+    """
     ids = pd.concat([true_dyads.pID1, true_dyads.pID2]).unique()
     permutations = list(combinations(ids, 2))
     pseudo_dyads = []
@@ -671,19 +681,46 @@ def pseudodyads(true_dyads, sample=0.1):
 
     pseudo_dyads = pd.DataFrame(pseudo_dyads,
                                 columns = [
-                                    "pID1", "pID2", "dyadType", "dyadID", "group"
+                                    "pID1", "pID2", "dyad_type", "dyadID", "group"
                                 ])
     
     # Use a stratified sample
     if sample is not None:
-        indices_real = list(np.where(pseudo_dyads.dyadType)[0])
+        indices_real = list(np.where(pseudo_dyads.dyad_type)[0])
         indices_random = []
         for target in list(set(pseudo_dyads.pID1.tolist())):
             indices_pseudo = list(np.where(
-                (pseudo_dyads.dyadType == False) & 
+                (pseudo_dyads.dyad_type == False) & 
                 (pseudo_dyads.pID1 == target)
             )[0])
             indices_random.append(random.sample(indices_pseudo, int(len(indices_pseudo) * sample)))
         pseudo_dyads = pseudo_dyads.iloc[indices_real + list(np.concatenate(indices_random))]
     
     return pseudo_dyads
+
+def plot_clustering(matrices, labels, description): 
+    """
+    Plots clustering in two-dimensional space (reduced by PCA). 
+    
+    Parameters:
+        matrices: np.array of matrices. 
+        labels: np.array of labels for matrices. Matrices will be assigned to a color according to label. 
+        description: Addition to title in order to describe plot. 
+    
+    Returns plot. 
+    """
+    # PCA 
+    mean_matrix = mean_riemann(matrices)
+    X_tangent = tangent_space(matrices, mean_matrix)
+    pca = PCA(n_components=2)
+    X_pca = pca.fit_transform(X_tangent)
+
+    # Plot 
+    plt.figure(figsize=(6, 5))
+    for label in np.unique(labels): 
+        plt.scatter(X_pca[labels == label, 0], X_pca[labels == label, 1], label=f"{description} {label}", alpha=0.8)
+    plt.xlabel("PC1")
+    plt.xlabel("PC2")
+    plt.title(f"Tangent Space PCA projection, {description}")
+    plt.legend()
+    plt.show()

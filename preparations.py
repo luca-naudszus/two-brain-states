@@ -23,11 +23,10 @@ from riemannianKMeans import pseudodyads
 
 # ------------------------------------------------------------
 # Set variables
-path = "C://Users//SBS_T//Documents//Luca//data"
-#path = "./data"
+path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/analysis/data/time-series-features/clustering/fNIRS_prepared"
 
-pseudo_dyads = False # Create pseudo dyads
-session_wise = True # Might lead to memory issues when creating pseudo dyads
+pseudo_dyads = True # Create pseudo dyads
+session_wise = False # Might lead to memory issues when creating pseudo dyads when running on a standard machine
 ageDPFs = False
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
@@ -85,8 +84,8 @@ def compute_true_duration(dyadID, session_n, in_epoch, cutpoints, upsampling_fre
 
     return true_duration, round(task_duration_secs * upsampling_freq)
 
-def get_and_zscore(list, activity): 
-    ts = sp.stats.zscore(list[activity], axis=1, ddof=1)
+def get_and_zscore(list, task): 
+    ts = sp.stats.zscore(list[task], axis=1, ddof=1)
     return ts
 
 def zscore_and_split(ts_list):
@@ -101,14 +100,13 @@ def add_durations(targetID, session_n, in_epoch, duration_epoch, true_duration):
 # ------------------------------------------------------------
 # Load data
 if ageDPFs: 
-    inpath = Path(path, "preprocesseddata_ageDPFs")
-    outpath = Path(path, "prepareddata_ageDPFs")
+    inpath = Path(path, "fNIRS_preprocessed_ageDPFs")
 else: 
-    inpath = Path(path, "preprocesseddata")
-    outpath = Path(path, "prepareddata")
-true_dyads = pd.read_csv(Path(path, "dyadList.csv")) # list of true dyads
-cutpoints = pd.read_excel(Path(path, "cutpoints_videos.xlsx")) # list of activity durations from video data
-best_channels = pd.read_csv(Path(path, "fNIRS_chs_ROIproximal.csv"))
+    inpath = Path(path, "fNIRS_preprocessed")
+infopath = Path(path, "additional_information")
+true_dyads = pd.read_csv(Path(infopath, "dyadList.csv")) # list of true dyads
+cutpoints = pd.read_excel(Path(infopath, "cutpoints_videos.xlsx")) # list of task durations from video data
+best_channels = pd.read_csv(Path(infopath, "fNIRS_chs_ROIproximal.csv"))
 
 expected_rois = {'l_ifg', 'l_tpj', 'r_ifg', 'r_tpj'}
 
@@ -150,9 +148,9 @@ for file in os.listdir(inpath):
 
         # Define durations of epochs
         events, event_dict = mne.events_from_annotations(data, verbose=verbosity)
-        for in_activity in range(3):
+        for in_task in range(3):
             data.annotations.duration[
-                in_activity] = (events[in_activity + 1][0] - events[in_activity][0] - 1)/upsampling_freq
+                in_task] = (events[in_task + 1][0] - events[in_task][0] - 1)/upsampling_freq
         data.annotations.duration[3] = (data[data.ch_names[0]][0].shape[1] - events[3][0] - 1)/upsampling_freq
 
         # Epoch data
@@ -246,13 +244,13 @@ for key in key_list:
             
             # ------------------------------------------------------------
             # Compare interpolated duration with true duration to assess which time has actually passed
-            # This enables us to determine the end of the activity and dismiss the recording after that. 
+            # This enables us to determine the end of the task and dismiss the recording after that. 
 
             ### We only have information on true duration for first three activities: 
             if in_epoch != len(target)-1:
                 
                 true_duration, task_samples = compute_true_duration(dyadID, session_n, in_epoch, cutpoints, upsampling_freq)
-                ### Dismiss the recording after the end of the activity.
+                ### Dismiss the recording after the end of the task.
                 target_interp = target_interp[:,:task_samples]
                 partner_interp = partner_interp[:,:task_samples]
             else:
@@ -276,7 +274,7 @@ for key in key_list:
 
     # ------------------------------------------------------------
     # Compare recorded duration with true duration to assess which time has actually passed (see above). 
-    # This enables us to determine the end of the activity and dismiss the recording after that. 
+    # This enables us to determine the end of the task and dismiss the recording after that. 
     else: 
         logging.warning(f'sub-{targetID}_session-{session_n}: partner data missing')
         target_list, duration_list, true_duration_list = [], [], []
@@ -288,7 +286,7 @@ for key in key_list:
             ### We only have information on true duration for first three activities: 
             if in_epoch != len(target)-1: 
                 true_duration, task_samples = compute_true_duration(dyadID, session_n, in_epoch, cutpoints, upsampling_freq)
-                ### Dismiss the recording after the end of the activity.
+                ### Dismiss the recording after the end of the task.
                 target_interp = target_interp[:,:task_samples]
             else:
                 true_duration = np.nan
@@ -332,26 +330,26 @@ for i, row in dyads.iterrows():
             target_channels = ['target ' + channel for channel in data_dict[target_key]['channels']]
             ts_target_temp, ts_partner_temp, ts_two_temp, ts_four_temp = [], [], [], []
 
-            for activity in range(4):
-                target_ts = get_and_zscore(target_list, activity).astype(np.float32)
+            for task in range(4):
+                target_ts = get_and_zscore(target_list, task).astype(np.float32)
                 
                 ### 1a target, one brain data (two blocks: HbO + HbR), channel-wise z-scored
                 if is_real:
-                    ts["one_brain"]["channel-wise"].append(target_ts)
-                    doc["one_brain"].extend([[row['pID1'], session, activity]])
-                    channels["one_brain"].append(target_channels)
+                    ts["one-brain"]["channel-wise"].append(target_ts)
+                    doc["one-brain"].extend([[row['pID1'], session, task]])
+                    channels["one-brain"].append(target_channels)
                 ts_target_temp.append(target_ts)
 
                 if partner_key in key_list: 
                     
                     partner_channels = ['partner ' + channel for channel in data_dict[partner_key]['channels']]
-                    partner_ts = get_and_zscore(data_dict[partner_key]['interpolation'], activity).astype(np.float32)
+                    partner_ts = get_and_zscore(data_dict[partner_key]['interpolation'], task).astype(np.float32)
 
                     ### 1a partner, one brain data (two blocks: HbO + HbR), channel-wise z-scored
                     if is_real:
-                        ts["one_brain"]["channel-wise"].append(partner_ts)
-                        doc["one_brain"].extend([[row['pID2'], session, activity]])
-                        channels["one_brain"].append(partner_channels)
+                        ts["one-brain"]["channel-wise"].append(partner_ts)
+                        doc["one-brain"].extend([[row['pID2'], session, task]])
+                        channels["one-brain"].append(partner_channels)
                     ts_partner_temp.append(partner_ts)
 
 
@@ -359,11 +357,11 @@ for i, row in dyads.iterrows():
                         n_samples = min(target_ts.shape[1], partner_ts.shape[1])
                         target_ts, partner_ts = target_ts[:,:n_samples], partner_ts[:,:n_samples]
                     
-                    ### 2a, two blocks: target + partner, channel-wise z-scored
+                    ### 2a, two blocks: target (HbO & HbR) + partner (HbO & HbR), channel-wise z-scored
                     ts_two = np.concatenate((target_ts, partner_ts), axis=0).astype(np.float32)     
-                    ts["two_blocks"]["channel-wise"].append(ts_two)
-                    doc["two_blocks"].extend([[dyadID, is_real, group, session, activity]])
-                    channels["two_blocks"].append(target_channels + partner_channels)
+                    ts["two-blocks"]["channel-wise"].append(ts_two)
+                    doc["two-blocks"].extend([[dyadID, is_real, group, session, task]])
+                    channels["two-blocks"].append(target_channels + partner_channels)
                     ts_two_temp.append(ts_two)
 
                     ### 3a, four blocks: target HbO, partner HbO, target HbR, partner HbR
@@ -372,9 +370,9 @@ for i, row in dyads.iterrows():
                                               partner_ts[:int(lenpchs/2)], 
                                               target_ts[int(lentchs/2):lentchs], 
                                               partner_ts[int(lenpchs/2):lenpchs]), axis=0).astype(np.float32)
-                    ts["four_blocks"]["channel-wise"].append(ts_four)
-                    doc["four_blocks"].extend([[dyadID, is_real, group, session, activity]])
-                    channels["four_blocks"].append(np.concatenate((target_channels[:int(lentchs/2)], 
+                    ts["four-blocks"]["channel-wise"].append(ts_four)
+                    doc["four-blocks"].extend([[dyadID, is_real, group, session, task]])
+                    channels["four-blocks"].append(np.concatenate((target_channels[:int(lentchs/2)], 
                                                                partner_channels[:int(lenpchs/2)], 
                                                                target_channels[int(lentchs/2):lentchs], 
                                                                partner_channels[int(lenpchs/2):lenpchs]), axis=0))
@@ -387,8 +385,8 @@ for i, row in dyads.iterrows():
 
                 ## append to list
                 if is_real:
-                    for activity in range(4):
-                        ts["one_brain"]["session-wise"].append(ts_target_split[activity])
+                    for task in range(4):
+                        ts["one-brain"]["session-wise"].append(ts_target_split[task])
 
                 if partner_key in key_list: 
                     ### session-wise z-scoring
@@ -396,29 +394,29 @@ for i, row in dyads.iterrows():
                                                     [ts_partner_temp, ts_two_temp, ts_four_temp])
                 
                     ## append to list
-                    for activity in range(4):
+                    for task in range(4):
                     
                         ### 1b partner, one brain data as above, channel- and session-wise z-scored
                         if is_real: 
-                            ts["one_brain"]["session-wise"].append(ts_partner_split[activity].astype(np.float32))
+                            ts["one-brain"]["session-wise"].append(ts_partner_split[task].astype(np.float32))
                     
                         ### 2b, two blocks as above, channel- and session-wise z-scored
-                        ts["two_blocks"]["session-wise"].append(ts_two_split[activity].astype(np.float32))        
+                        ts["two-blocks"]["session-wise"].append(ts_two_split[task].astype(np.float32))        
                         ### 3b, four blocks as above, channel- and session-wise z-scored
-                        ts["four_blocks"]["session-wise"].append(ts_four_split[activity].astype(np.float32))
+                        ts["four-blocks"]["session-wise"].append(ts_four_split[task].astype(np.float32))
 
 # ------------------------------------------------------------
 # Save data
-pseudo = "true" if pseudo_dyads else "false"
-
 for key in list(ts.keys()):
-    np.savez(Path(outpath, f"ts_{key}_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['channel-wise'])
-    np.savez(Path(outpath, f"ts_{key}_session_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['session-wise'])
-    columns = [
-        "id", "session", "activity"] if key == "one_brain" else [
-        "id", "isReal", "group", "session", "activity"
-    ]
+    if key == "one-brain": 
+        columns = ["id", "session", "task"]
+        pseudo = "false"
+    else: 
+        columns = ["id", "isReal", "group", "session", "task"]
+        pseudo = "true" if pseudo_dyads else "false"
+    np.savez(Path(path, key, f"ts_{key}_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['channel-wise'])
+    np.savez(Path(path, key, f"ts_{key}_session_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['session-wise'])
     pd.DataFrame(doc[key], 
                  columns=columns).to_csv(
-                     Path(outpath, f"doc_{key}_pseudo-{pseudo}.csv"))
-    np.savez(Path(outpath, f"channels_{key}_pseudo-{pseudo}"), *channels[key])
+                     Path(path, key, f"doc_{key}_pseudo-{pseudo}.csv"))
+    np.savez(Path(path, key, f"channels_{key}_pseudo-{pseudo}"), *channels[key])

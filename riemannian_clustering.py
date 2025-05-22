@@ -1,600 +1,587 @@
-# Author: Luca A. Naudszus, Social Brain Sciences, ETH Zurich
-# Date: 27 January 2025
+# Riemannian k-Means clustering for fNIRS brain data
 
+#**Author:** Luca A. Naudszus
+#**Date:** 20 February 2025
+#**Affiliation:** Social Brain Sciences Lab, ETH Zürich
+#**Email:** luca.naudszus@gess.ethz.ch
 
 # ------------------------------------------------------------
-# import packages
+# Import packages and custom functions
 
 from datetime import datetime
+import json
+from pathlib import Path
+#---
 from itertools import product
-from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.linalg import block_diag
-import sys
 import pandas as pd
-import sklearn
-from sklearn.base import BaseEstimator, ClusterMixin, TransformerMixin
-from sklearn.model_selection import StratifiedKFold
-from sklearn.compose import ColumnTransformer
-from sklearn.utils.validation import check_is_fitted
-from sklearn.pipeline import Pipeline, make_pipeline
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import silhouette_score, calinski_harabasz_score
+#---
 from pyriemann.utils.mean import mean_riemann
 from pyriemann.utils.tangentspace import tangent_space
 from sklearn.decomposition import PCA
-import pyriemann
-from pyriemann.classification import SVC
-from pyriemann.estimation import (
-    BlockCovariances, 
-    Covariances,
-    Kernels,
-    Shrinkage,
+from sklearn.metrics import adjusted_rand_score
+#---
+from riemannianKMeans import (
+    Demeaner, 
+    ListTimeSeriesWindowTransformer, 
+    HybridBlocks, 
+    RiemannianKMeans, 
+    ch_score, 
+    geodesic_distance_ratio, 
+    plot_clustering,
+    project_to_common_space, 
+    riemannian_davies_bouldin, 
+    riemannian_silhouette_score, 
+    riemannian_variance
 )
-from pyriemann.utils.distance import distance_riemann, distance_wasserstein
-ker_est_functions = [
-    "linear", "poly", "polynomial", "rbf", "laplacian", "cosine"
-]
-from pyriemann.utils.covariance import cov_est_functions
 
 # ------------------------------------------------------------
-# define constant values
-block_size = 8 # number of channels for HbO and HbR
-n_jobs = -1 # use all available cores
-cv_splits = 5 # number of cross-validation folds
-random_state = 42 # random state for reproducibility
+# Set path
+path = '/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/analysis/data/time-series-features/clustering'
+
+# ------------------------------------------------------------
+# Set arguments. Change only variables in this section of the script. 
+
+# which type of data are we interested in?
+type_of_data = "one-brain"
+# one-brain, two-blocks, four-blocks: channel-wise z-scoring
+# one-brain_session, etc.: channel- and session-wise z-scoring
+exp_block_size = 4
+which_freq_bands = 0 # Choose from 0 (0.01 to 0.4), 1 (0.1 to 0.2), 2 (0.03 to 0.1), 3 (0.02 to 0.03). 
+ageDPFs = False
+
+# do we want to use pseudo dyads?
+pseudo_dyads = False
+# True has excessive memory usage and 
+# cannot run on a standard machine at the moment. 
+# True is invalid for type_of_data == "one-brain", 
+# pseudo dyads are created later in that case. 
+
+# do we want to use data with missing channels?
+use_missing_channels = False
+# if so, data from all sessions are projected into a common space
+
+# how do we want to cluster?
+# Choose from 'full', 'id-wise', 'session-wise'
+clustering = 'full'
+# Which dyad/participant do we want to look at? (only for id-wise and session-wise clustering)
+which_id = 'all' # set which_id = 'all' for all dyads/participants
+# Which session do we want to look at? (only for session-wise clustering)
+which_session = 'all' # set which_session = 'all' for all sessions
+
+# should the matrices be demeaned? 
+demean = False
+# if so, within-id or within-session?
+demeaner_var = 'session-wise' # 'none', 'id-wise', 'session-wise'
+# if so, which method?
+demeaner_method = 'airm' # 'log-euclidean', 'projection', or 'airm'
+#TODO: Projection is a quick and dirty solution which sometimes encounters errors. 
+# Log-euclidean is the second-fastest and the fastest among the two meaningful implementations. 
+# AIRM is slower, but more accurate (respects the curvature of the SPD manifold). 
+
+# do we want to do a single run or a grid search? (False = single run, True = grid search)
+grid_search = False
+## in case of False, define hyperparameters below
+## in case of True, define parameter space below
+
+# are we interested in the plot? (True/False, overridden in case of grid search: no plot)
+plot = True
+
+# hyperparameters (overridden in case of grid search)
+shrinkage = 0.1 # shrinkage value
+metrics = 'rbf' # kernel function
 n_clusters = 5 # number of clusters for k-means
-n_init = 100 # number of initializations
-max_iter = 5 # maximum number of iterations
+
+# parameter space for grid search
+params_shrinkage = [0, 0.01 ,0.1]
+params_kernel = ['cov', 'rbf', 'lwf', 'tyl', 'corr']
+params_n_clusters = [3] # sys.argv[1] for usage on Euler
+
+# information on data
 upsampling_freq = 5 # frequency to which the data have been upsampled
+window_length = 15 # length of windows in s
+step_length = 1 # steps 
+
+# define global settings
+n_jobs = -1 # use all available cores
+random_state = 42 # random state for reproducibility
+n_init = 10 # number of initializations for kMeans
+max_iter = 5 # maximum number of iterations for kMeans
 
 # ------------------------------------------------------------
-# define custom classes and functions
-class WindowTransformer(BaseEstimator, TransformerMixin):
-    """Splits the time series into non-overlapping windows of shape (n_channels, window_size). 
-        Author: Luca Naudszus."""
-    def __init__(self, window_size=upsampling_freq*10, step_size=None):
-        self.window_size = window_size
-        self.step_size = step_size
+# Define custom functions. Do not change this section. 
 
-    def fit(self, X, y=None):
-        return self
+def pipeline(X, y, id, session, 
+             clustering, sessions, ids, blocks, n_channels, 
+             demean, demeaner_var, demeaner_method, plot, 
+             window_length, step_length, 
+             shrinkage, metrics, n_clusters): 
+    
+    # ------------------------------------------------------------
+    ### Get data
+    if clustering == 'full':
+        X_tmp, y_tmp, sessions_tmp, ids_tmp, blocks_tmp, channels_tmp = X, y, sessions, ids, blocks, n_channels
+        print(f"Data loaded: {len(X_tmp)} trials")
+    elif clustering == 'id-wise':
+        indices = np.where(ids == id)[0]
+        if len(indices) == 0:
+            raise ValueError(f"ID {id} and session {session} not found in dataset.")
+        X_tmp, y_tmp, sessions_tmp, ids_tmp, blocks_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [blocks[i] for i in indices], [n_channels[i] for i in indices]
+        print(f"Data loaded for id {id}: {len(X_tmp)} trials")
+    elif clustering == 'session-wise':
+        indices = np.where((ids == id) & (sessions == session))[0]
+        if len(indices) == 0:
+            raise ValueError(f"ID {id} and session {session} not found in dataset.")
+        X_tmp, y_tmp, sessions_tmp, ids_tmp, blocks_tmp, channels_tmp = [X[i] for i in indices], [y[i] for i in indices], [sessions[i] for i in indices], [ids[i] for i in indices], [blocks[i] for i in indices], [n_channels[i] for i in indices]
+        print(f"Data loaded for id {id} and session {session}: {len(X_tmp)} trials, {X_tmp[0].shape[0]} channels")
+    
+    # ------------------------------------------------------------
+    ### Group by number of channels and segment into windows
+    print("Preparing data")
+    if use_missing_channels: 
+        # Exclude data with too few channels
+        set_n_channels = np.unique(channels_tmp)
+        set_n_channels = set_n_channels[set_n_channels >= (exp_n_channels/2)]
+        grouping_indices = [[np.where(np.array(channels_tmp) == channel_no)[0]] for channel_no in set_n_channels]
+    else:
+        grouping_indices = [np.where(np.array(channels_tmp) == exp_n_channels)]
+    windowsTransformer = ListTimeSeriesWindowTransformer(
+            window_size = upsampling_freq*window_length,
+            step_size = upsampling_freq*step_length
+        )
+    
+    # Group variables
+    X_grouped = [[X_tmp[i] for i in ind[0]] for ind in grouping_indices]
+    tasks_grouped = [np.array([y_tmp[i] for i in ind[0]]) for ind in grouping_indices]
+    sessions_grouped = [np.array([sessions_tmp[i] for i in ind[0]]) for ind in grouping_indices]
+    ids_grouped = [np.array([ids_tmp[i] for i in ind[0]]) for ind in grouping_indices]
+    blocks_grouped = [np.array([blocks_tmp[i] for i in ind[0]]) for ind in grouping_indices]
+    channels_grouped = [np.array([channels_tmp[i] for i in ind[0]]) for ind in grouping_indices]
 
-    def transform(self, X):
-        assert isinstance(X, np.ndarray), "Input must be a NumPy array"
-        n_channels = X.shape[0]
-        assert X.ndim == 2 and (n_channels in {8, 16}), "Unexpected input shape"
-        n_samples = X.shape[1]
-        if self.step_size == None: 
-            n_windows = n_samples // self.window_size
-            truncated_length = n_windows * self.window_size
-            X_windows = X[:, :truncated_length].reshape(n_channels, n_windows, self.window_size)
-            return np.transpose(X_windows, (1, 0, 2))
+    X_seg, tasks_seg, sessions_seg, ids_seg, blocks_seg, channels_seg = [], [], [], [], [], []
+    
+    # Transform into windows
+    for in_channelgroup in range(len(X_grouped)):
+        X_seg.append(windowsTransformer.fit_transform(X_grouped[in_channelgroup]))
+        tasks_seg.append(windowsTransformer.transform(tasks_grouped[in_channelgroup], is_labels=True))
+        sessions_seg.append(windowsTransformer.transform(sessions_grouped[in_channelgroup], is_labels=True))
+        ids_seg.append(windowsTransformer.transform(ids_grouped[in_channelgroup], is_labels=True))
+        blocks_seg.append(windowsTransformer.transform(blocks_grouped[in_channelgroup], is_labels=True))
+        channels_seg.append(windowsTransformer.transform(channels_grouped[in_channelgroup], is_labels=True))
+     
+    # ------------------------------------------------------------
+    ### Get kernel matrices with HybridBlocks
+    X_prepared = []
+    
+    for in_channelgroup in range(len(X_seg)):
+        actual_block_sizes = blocks_seg[in_channelgroup][0]
+        if sum_blocks: 
+            block_size = [actual_block_sizes[0+i*2] + actual_block_sizes[1+i*2] for i in range(exp_n_blocks)]
         else: 
-            n_windows = (n_samples - self.window_size) // self.step_size + 1
-            # Extract windows using a sliding approach
-            X_windows = np.array([X[:,i:i + self.window_size] for i in range(0, n_samples - self.window_size + 1, self.step_size)])
-            return X_windows
+            block_size = list(actual_block_sizes)
+        assert len(block_size) == exp_n_blocks, "Block number in data does not match expected block number."
+        block_kernels = HybridBlocks(block_size=block_size,
+                                 shrinkage=shrinkage,
+                                 metrics=metrics)
+        X_prepared.append(block_kernels.fit_transform(X_seg[in_channelgroup]))
 
-class ListTimeSeriesWindowTransformer(BaseEstimator, TransformerMixin):
-    """Transforms a list of time series into non-overlapping windows of shape (n_channels, window_size). 
-        Author: Luca Naudszus."""
-    def __init__(self, window_size = upsampling_freq*10, step_size=None):
-        self.window_size = window_size
-        self.step_size = step_size
-        self.base_transformer = WindowTransformer(window_size, step_size)
+    # ------------------------------------------------------------
+    ### Project matrices into common space
+    if use_missing_channels:
+        print('Projecting matrices into common space')
+        target_dim = np.min(set_n_channels)
+        for in_channelgroup in range(len(X_prepared)):
+            if X_prepared[in_channelgroup][0].shape[0] != target_dim:
+                X_prepared[in_channelgroup] = project_to_common_space(X_prepared[in_channelgroup], target_dim)
+    X_common = np.concatenate(X_prepared)
+    tasks_common = np.concatenate(tasks_seg)
+    sessions_common = np.concatenate(sessions_seg)
+    ids_common = np.concatenate(ids_seg)
+    channels_common = np.concatenate(channels_seg)
 
-    def fit(self, X, y=None):
-        return self
+    # ------------------------------------------------------------
+    ### Demean matrices
+    # Set group variables for demeaner
+    if demean: 
+        if clustering == 'full': 
+            if demeaner_var == 'id-wise':
+               groups = ids_common
+            elif demeaner_var == 'session-wise':
+                groups = ["_".join(map(str, t)) for t in list(zip(ids_common, sessions_common))]
+            else: 
+                demean = False
+                print("Warning: will not demean because demeaning mode is unclear.")
+        elif clustering == 'id-wise': 
+            if demeaner_var == 'session-wise':
+                groups = sessions_common
+            elif demeaner_var == 'id-wise': 
+                demean = False
+                print("Warning: will not demean id-wise because clustering is id-wise.")
+            else: 
+                demean = False
+                print("Warning: will not demean because demeaning mode is unclear.")
+        elif clustering == 'session-wise': 
+            demean = False
+            print("Warning: will not demean because clustering is session-wise.")
+    if demean and (len(np.unique(channels_common)) > 1): 
+        demeaner = Demeaner(groups=groups,
+                        activate=demean,
+                        method=demeaner_method)
+        final_matrices = demeaner.fit_transform(X_common)
     
-    def transform(self, X):
-        assert isinstance(X, list), "Input must be a list of NumPy arrays"
-        transformed = [self.base_transformer.transform(x) for x in X]
-        return np.concatenate(transformed, axis = 0)
+    else:
+        final_matrices = X_common
 
-class Stacker(TransformerMixin):
-    """Stacks values of a DataFrame column into a 3D array. Author: Tim Näher."""
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        assert isinstance(X, pd.DataFrame), "Input must be a DataFrame"
-        assert X.shape[1] == 1, "DataFrame must have only one column"
-        return np.stack(X.iloc[:, 0].values)
-
-
-class FlattenTransformer(BaseEstimator, TransformerMixin):
-    """Flattens the last two dimensions of an array.
-        ColumnTransformer requires 2D output, so this transformer
-        is needed. Author: Tim Näher."""
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        return X.reshape(X.shape[0], -1)
-
-
-class HybridBlocks(BaseEstimator, TransformerMixin):
-    """Estimation of block kernel or covariance matrices with
-    customizable metrics and shrinkage.
-
-    Perform block matrix estimation for each given time series,
-    computing either kernel matrices or covariance matrices for
-    each block based on the specified metrics. The block matrices
-    are then concatenated to form the final block diagonal matrices.
-    It is possible to add different shrinkage values for each block.
-    This estimator is helpful when dealing with data from multiple
-    sources or modalities (e.g. fNIRS, EMG, EEG, gyro, acceleration),
-    where each block corresponds to a different source or modality
-    and benefits from separate processing and tuning.
-
-    Parameters
-    ----------
-    block_size : int | list of int
-        Sizes of individual blocks given as int for same-size blocks,
-        or list for varying block sizes.
-    metrics : string | list of string, default='linear'
-        The metric(s) to use when computing matrices between channels.
-        For kernel matrices, supported metrics are those from
-        ``pairwise_kernels``: 'linear', 'poly', 'polynomial',
-        'rbf', 'laplacian', 'cosine', etc.
-        For covariance matrices, supported estimators are those from
-        pyRiemann: 'scm', 'lwf', 'oas', 'mcd', etc.
-        If a list is provided, it must match the number of blocks.
-    shrinkage : float | list of float, default=0
-        Shrinkage parameter(s) to regularize each block's matrix.
-        If a single float is provided, it is applied to all blocks.
-        If a list is provided, it must match the number of blocks.
-    n_jobs : int, default=None
-        The number of jobs to use for the computation.
-    **kwargs : dict
-        Any further parameters are passed directly to the kernel function(s)
-        or covariance estimator(s).
-
-    See Also
-    --------
-    BlockCovariances
+    # ------------------------------------------------------------
+    ### KMeans
+    kmeans = RiemannianKMeans(n_jobs=n_jobs,
+                            n_clusters=n_clusters,
+                            n_init=n_init)
+    classes = kmeans.fit_predict(final_matrices)
+    cluster_means = kmeans.centroids()
+    clusters = [final_matrices[classes == i] for i in range(n_clusters)]
     
-    Author: Tim Näher.
-    """
+    # ------------------------------------------------------------
+    ### Clustering performance evaluation
+    #sh_score_pipeline = riemannian_silhouette_score(final_matrices, classes)
+    sh_score_pipeline = np.nan
+    ch_score_pipeline = ch_score(final_matrices, classes)
+    riem_var_pipeline = [riemannian_variance(clusters[i], cluster_means[i]) for i in range(n_clusters)]
+    db_score_pipeline = riemannian_davies_bouldin(clusters, cluster_means)
+    gdr_pipeline = geodesic_distance_ratio(clusters, cluster_means)
+    print(f"Silhouette Score: {sh_score_pipeline}")
+    print(f"Calinski-Harabasz Score: {ch_score_pipeline}")
+    print(f"Riemannian Variance: {np.mean(riem_var_pipeline)}")
+    print(f"Davies-Bouldin-Index: {db_score_pipeline}")
+    print(f"Geodesic Distance Ratio: {gdr_pipeline}")
 
-    def __init__(self, block_size, metrics="linear", shrinkage=0,
-                 n_jobs=None, **kwargs):
-        self.block_size = block_size
-        self.metrics = metrics
-        self.shrinkage = shrinkage
-        self.n_jobs = n_jobs
-        self.kwargs = kwargs
+    # ------------------------------------------------------------
+    ### Rand indices
+    rand_score_id = adjusted_rand_score(classes, ids_common) if clustering == 'all' else np.nan
+    rand_score_ses = adjusted_rand_score(classes, sessions_common) if clustering != 'session-wise' else np.nan
+    rand_score_act = adjusted_rand_score(classes, tasks_common)
+    # rand_score_chs = adjusted_rand_score(classes, channels_common) # adjust return results section for inclusion
 
-    def fit(self, X, y=None):
-        """Fit.
-
-        Prepare per-block transformers.
-
-        Parameters
-        ----------
-        X : ndarray, shape (n_matrices, n_channels, n_times)
-            Multi-channel time series.
-        y : None
-            Not used, here for compatibility with scikit-learn API.
-
-        Returns
-        -------
-        self : HybridBlocks instance
-            The HybridBlocks instance.
-        """
-        n_matrices, n_channels, n_times = X.shape
-
-        # Determine block sizes
-        if isinstance(self.block_size, int):
-            num_blocks = n_channels // self.block_size
-            remainder = n_channels % self.block_size
-            self.blocks = [self.block_size] * num_blocks
-            if remainder > 0:
-                self.blocks.append(remainder)
-        elif isinstance(self.block_size, list):
-            self.blocks = self.block_size
-            if sum(self.blocks) != n_channels:
-                raise ValueError(
-                    "Sum of block sizes mustequal number of channels"
-                    )
-        else:
-            raise ValueError(
-                "block_size must be int or list of ints"
-                )
-
-        # Compute block indices
-        self.block_indices = []
-        start = 0
-        for size in self.blocks:
-            end = start + size
-            self.block_indices.append((start, end))
-            start = end
-
-        # Handle metrics parameter
-        n_blocks = len(self.blocks)
-        if isinstance(self.metrics, str):
-            self.metrics_list = [self.metrics] * n_blocks
-        elif isinstance(self.metrics, list):
-            if len(self.metrics) != n_blocks:
-                raise ValueError(
-                    f"Length of metrics list ({len(self.metrics)}) "
-                    f"must match number of blocks ({n_blocks})"
-                )
-            self.metrics_list = self.metrics
-        else:
-            raise ValueError(
-                "Parameter 'metrics' must be a string or a list of strings."
-            )
-
-        # Handle shrinkage parameter
-        if isinstance(self.shrinkage, (float, int)):
-            self.shrinkages = [self.shrinkage] * n_blocks
-        elif isinstance(self.shrinkage, list):
-            if len(self.shrinkage) != n_blocks:
-                raise ValueError(
-                    f"Length of shrinkage list ({len(self.shrinkage)}) "
-                    f"must match number of blocks ({n_blocks})"
-                )
-            self.shrinkages = self.shrinkage
-        else:
-            raise ValueError(
-                "Parameter 'shrinkage' must be a float or a list of floats."
-            )
-
-        # Build per-block pipelines
-        self.block_names = [f"block_{i}" for i in range(n_blocks)]
-
-        transformers = []
-        for i, (indices, metric, shrinkage_value) in enumerate(
-                zip(self.block_indices, self.metrics_list, self.shrinkages)):
-            block_name = self.block_names[i]
-
-            # Build the pipeline for this block
-            block_pipeline = make_pipeline(
-                Stacker(),
-            )
-
-            # Determine if the metric is a kernel or a covariance estimator
-            if metric in ker_est_functions:
-                # Use Kernels transformer
-                estimator = Kernels(
-                    metric=metric,
-                    n_jobs=self.n_jobs,
-                    **self.kwargs
-                )
-                block_pipeline.steps.append(('kernels', estimator))
-            elif metric in cov_est_functions.keys():
-                # Use Covariances transformer
-                estimator = Covariances(
-                    estimator=metric,
-                    **self.kwargs
-                )
-                block_pipeline.steps.append(('covariances', estimator))
-            else:
-                raise ValueError(
-                    f"Metric '{metric}' is not recognized as a kernel "
-                    f"metric or a covariance estimator."
-                )
-
-            # add shrinkage if provided
-            # TODO: add support for different shrinkage types at some point?
-            if shrinkage_value != 0:
-                shrinkage_transformer = Shrinkage(shrinkage=shrinkage_value)
-                block_pipeline.steps.append(
-                    ('shrinkage', shrinkage_transformer)
-                    )
-
-            # Add the flattening transformer at the end of the pipeline
-            block_pipeline.steps.append(('flatten', FlattenTransformer()))
-
-            transformers.append((block_name, block_pipeline, [block_name]))
-
-        # create the columncransformer with per-block pipelines
-        self.preprocessor = ColumnTransformer(transformers)
-
-        # Prepare the DataFrame
-        X_df = self._prepare_dataframe(X)
-
-        # Fit the preprocessor
-        self.preprocessor.fit(X_df)
-
-        return self
-
-    def transform(self, X):
-        """Estimate block kernel or covariance matrices.
-
-        Parameters
-        ----------
-        X : ndarray, shape (n_matrices, n_channels, n_times)
-            Multi-channel time series.
-
-        Returns
-        -------
-        M : ndarray, shape (n_matrices, n_channels, n_channels)
-            Block diagonal matrices (kernel or covariance matrices).
-        """
-        check_is_fitted(self, 'preprocessor')
-
-        # make the df wheren each block is 1 column
-        X_df = self._prepare_dataframe(X)
-
-        # Transform the data
-        transformed_blocks = []
-        data_transformed = self.preprocessor.transform(X_df)
-
-        # calculate the number of features per block
-        features_per_block = [size * size for size in self.blocks]
-
-        # compute the indices where to split the data
-        split_indices = np.cumsum(features_per_block)[:-1]
-
-        # split the data into flattened blocks
-        blocks_flat = np.split(data_transformed, split_indices, axis=1)
-
-        # reshape each block back to its original shape
-        for i, block_flat in enumerate(blocks_flat):
-            size = self.blocks[i]
-            block = block_flat.reshape(-1, size, size)
-            transformed_blocks.append(block)
-
-        # Construct the block diagonal matrices using scipy
-        M_matrices = np.array([
-            block_diag(*[Xt[i] for Xt in transformed_blocks])
-            for i in range(X.shape[0])
-        ])
-        self.matrices_ = M_matrices
-        return M_matrices
-
-    def _prepare_dataframe(self, X):
-        """Converts the data into a df with eac hblock as column."""
-        data_dict = {}
-        for i, (start, end) in enumerate(self.block_indices):
-            data_dict[self.block_names[i]] = list(X[:, start:end, :])
-        return pd.DataFrame(data_dict)
-
-class RiemannianKMeans(BaseEstimator, ClusterMixin):
-    """Wrapper for pyriemann.clustering.KMeans for usage in GridSearchCV. 
-        Author: Luca Naudszus."""
-    def __init__(self, n_clusters = 3, n_jobs = n_jobs, max_iter = max_iter, n_init = 100):
-        self.n_clusters = n_clusters
-        self.n_jobs = n_jobs
-        self.max_iter = max_iter
-        self.n_init = n_init
-        self.metric = "riemann"
-        self.kmeans = pyriemann.clustering.Kmeans(n_clusters=n_clusters, 
-            n_jobs = n_jobs, 
-            max_iter = max_iter,
-            n_init = n_init,
-            metric = "riemann")
-        
-
-    def fit(self, X, y=None):
-        print(f"Fitting data with shape {X.shape}, using {self.n_init} random initializations")
-        self.kmeans.fit(X)
-        self.labels_ = self.kmeans.labels_
-        return self
-
-    def predict(self, X):
-        print(f"Predicting data with shape {X.shape}")
-        return self.kmeans.predict(X)
-
-    def fit_predict(self, X, y=None):
-        return self.fit(X).labels_
-
-def riemannian_silhouette_score(pipeline, n_jobs = n_jobs, distance=distance_riemann): 
-    """Calculates Silhouette Coefficient based on pairwise Affine-Invariant Riemannian Metric on randomly chosen matrices.""" 
-    # We could also use Bures-Wasserstein distance (distance_wasserstein), which is a lot faster, 
-    # but not what is used in the actual Lloyd's algorithm as implemented above. 
-
-    # (1) Extract matrices
-    block_matrices = pipeline.named_steps["block_kernels"].matrices_
-    labels = pipeline.named_steps["kmeans"].labels_
-
-    # (2) Stratified sampling
-    #random_idx = np.random.choice(range(block_matrices.shape[0]), block_matrices.shape[0]/10, replace=False)
-    #sampled_matrices = block_matrices[random_idx]
-    #sampled_labels = labels[random_idx]
-    #n_matrices = sampled_matrices.shape[0]
+    # ------------------------------------------------------------
+    ### Plot clustering
+    if plot and not grid_search: 
+        plot_clustering(final_matrices, classes, "cluster")
+        if use_missing_channels: 
+            plot_clustering(final_matrices, channels_common, "n_channels")
+        if clustering != 'session-wise':
+            plot_clustering(final_matrices, sessions_common, "session")
+        plot_clustering(final_matrices, tasks_common, "task")
     
-    df = pd.DataFrame({'index': np.arange(len(block_matrices)), 'cluster': labels})
-    # sample 10% from each cluster
-    stratified_subset = (   
-        df.groupby('cluster', group_keys=False)
-        .apply(lambda x: x.sample(frac=1, random_state=random_state), include_groups=False)
-        .reset_index(drop=True)
-    )
-    stratified_indices = stratified_subset['index'].values  # Remove cluster column
-    stratified_matrices = block_matrices[stratified_indices]
-    stratified_labels = labels[stratified_indices]
-    n_matrices = len(stratified_matrices)
+    # ------------------------------------------------------------
+    # Return results
+    results = [final_matrices, cluster_means, classes, tasks_common, sessions_common, ids_common, sh_score_pipeline, ch_score_pipeline, riem_var_pipeline, db_score_pipeline, gdr_pipeline, rand_score_act, rand_score_ses, rand_score_id, len(sessions_tmp)]
+    return results
 
-    print(f"Processing: stratified sample of {n_matrices} data points")
+def get_counts(strings):
+    a = b = c = d = 0
+    participants = ['target', 'partner'] 
+    chromophore = ['hbr', 'hbo']
+    level1 = chromophore if type_of_data in {"four-blocks", "four-blocks_session"} else participants
+    level2 = participants if type_of_data in {"four-blocks", "four-blocks_session"} else chromophore
+
+    for s in strings:
+        if level1[0] in s or type_of_data in {"one-brain", "one-brain_session"}: 
+            if level2[0] in s:
+                a += 1
+            elif level2[1] in s:
+                b += 1
+        elif level1[1] in s:
+            if level2[0] in s:
+                c += 1
+            elif level2[1] in s:
+                d += 1
+
+    if type_of_data in {"one-brain", "one-brain_session"}:
+        return a, b
+    else: 
+        return a, b, c, d
     
-    # (3) Parallel execution of distance calculation
-    def compute_distance(i, j, matrices, distance):
-        if j == 0:
-            print(f"Processing i = {i} (outer loop)")
-        return distance(matrices[i], matrices[j])
-
-    pairwise_distances = Parallel(n_jobs=n_jobs)(
-        delayed(compute_distance)(i, j, stratified_matrices, distance)
-        for i in range(n_matrices) for j in range(i+1, n_matrices)
-    )
-    
-    # (4) Convert list into full distance matrix
-    pairwise_distances_matrix = np.zeros((n_matrices, n_matrices))
-    idx = np.triu_indices(n_matrices, 1)
-    pairwise_distances_matrix[idx] = pairwise_distances
-    pairwise_distances_matrix += pairwise_distances_matrix.T
-
-    # (5) Calculate silhouette score
-    score = silhouette_score(pairwise_distances_matrix, stratified_labels, metric='precomputed')
-    return score
-
-def ch_score(pipeline):
-    # (1) Extract and transform matrices
-    flattener = FlattenTransformer()
-    block_matrices = pipeline.named_steps["block_kernels"].matrices_
-    flattener.fit(block_matrices)
-    block_matrices = flattener.transform(block_matrices)
-    preds = pipeline.named_steps["kmeans"].labels_
-    
-    # (2) Calculate Calinski-Harabasz score
-    score = calinski_harabasz_score(block_matrices, preds)
-    return score
-
-            
 # ------------------------------------------------------------
-### Load data
+### Load data. Do not change this section. 
+
+# checks
+if type_of_data == "one-brain" and pseudo_dyads: 
+    pseudo_dyads = False
+    raise ValueError("Set pseudo_dyads = False for one brain data. For one brain data, pseudo dyads are created in a later step.")
+if type_of_data == "one-brain" and exp_block_size == 8: 
+    print("Warning: one-brain data with block size 8 is unusual, check if this is what you want.")
+if exp_block_size not in {4, 8}:
+    raise ValueError('Unknown expected block size. Choose from 4, 8.')
+
+if clustering not in {'full', 'id-wise', 'session-wise'}:
+    raise ValueError(f"Unknown clustering type: {clustering}. Choose from 'full', 'id-wise', or 'session-wise'.")
+
+if demean:
+    if demeaner_method not in {'log-euclidean', 'tangent', 'projection', 'airm'}:
+        raise ValueError("Invalid demeaner method. Choose from 'log-euclidean', 'tangent', 'projection', 'airm'")
+    if demeaner_var not in {'id-wise', 'session-wise'}:
+        raise ValueError("Invalid demeaner variable. Choose 'id-wise' or 'session-wise'")
+else: 
+    demeaner_method = "False"
+
+# Make folder
+datapath = Path(path) / "fNIRS_prepared" / type_of_data
+
 # Load the dataset
-npz = np.load('./data/ts_four_blocks.npz')
+pseudo = "true" if pseudo_dyads else "false"
+npz_data = np.load(Path(datapath) / f"ts_{type_of_data}_fb-{which_freq_bands}_pseudo-{pseudo}.npz")
 X = []
-for array in list(npz.files):
-    X.append(npz[array])
-doc = pd.read_csv('./data/doc_four_blocks.csv', index_col = 0)
+for array in list(npz_data.files):
+    X.append(npz_data[array])
+doc = pd.read_csv(Path(datapath) / f"doc_{type_of_data}_pseudo-{pseudo}.csv", index_col = 0)
+ids = np.array(doc['id'])
+sessions = np.array(doc['session'])
 conditions = [
-    (doc['2'] == 0),
-    (doc['2'] == 1) | (doc['2'] == 2),
-    (doc['2'] == 3)]
-choices = ['alone', 'collab', 'diverse']
-dyads = np.array(doc['0'])
+    (doc['task'] == 0),
+    (doc['task'] == 1),
+    (doc['task'] == 2),
+    (doc['task'] == 3)]
+choices = ['Alone', 'Together_1', 'Together_2', 'diverse']
 y = np.select(conditions, choices, default='unknown')
-n_channels = X[0].shape[0] # shape of first timeseries is shape of all timeseries
+npz_channels = np.load(Path(datapath) / f"channels_{type_of_data}_pseudo-{pseudo}.npz")
+channels = []
+for array in list(npz_channels.files):
+    channels.append(npz_channels[array])
+
+# make variable for chosen ids
+chosen_ids = np.unique(ids) if which_id == 'all' else np.atleast_1d(which_id)
 
 # choose only drawing alone and collaborative drawing
-X = [i for idx, i in enumerate(X) if y[idx] != 'diverse']
-dyads = dyads[y != 'diverse']
-y = y[y != 'diverse']
+drawing_indices = np.where(y != 'diverse')[0]
+X = [X[i] for i in drawing_indices]
+y = y[drawing_indices]
+ids = ids[drawing_indices]
+sessions = sessions[drawing_indices]
+channels = [channels[i] for i in drawing_indices]
+blocks = np.array([get_counts(ch) for ch in channels])
+n_channels = np.array([len(ch) for ch in channels])
+
+# channels and block size
+if type_of_data in {"one-brain", "one-brain_session"}:
+    exp_n_channels = 8
+    exp_n_blocks = 2 if exp_block_size == 4 else 1
+else:
+    exp_n_channels = 16
+    exp_n_blocks = 4 if exp_block_size == 4 else 2
+sum_blocks = exp_block_size == 8
+
+
+# make dict
+freq_bands = [[0.015, 0.4], [0.1, 0.2], [0.03, 0.1], [0.02, 0.03]]
+pipeline_metadata = {
+    "type_of_data": type_of_data,
+    "block_size": exp_block_size,
+    "l_freq": freq_bands[which_freq_bands][0],
+    "h_freq": freq_bands[which_freq_bands][1],
+    "use_missing_channels": use_missing_channels,
+    "clustering": clustering,
+    "which_id": which_id, 
+    "which_session": which_session,
+    "demean": demean,
+    "demeaner_method": demeaner_method,
+    "demeaner_var": demeaner_var,
+    "s_freq": upsampling_freq,
+    "window_size": window_length,
+    "step_size": step_length,
+}
+
+if grid_search:
+    pipeline_metadata.update({
+        "shrinkage": list(params_shrinkage),
+        "metrics": list(params_kernel),
+        "n_clusters": list(params_n_clusters),
+    })
+else:
+    pipeline_metadata.update({
+        "shrinkage": shrinkage,
+        "metrics": metrics,
+        "n_clusters": n_clusters,
+    })
 
 # ------------------------------------------------------------
-### Set up the pipeline
+### Run pipeline. Do not change this section. 
 
-# Define the pipeline with HybridBlocks and Riemannian Lloyd's algorithm
-pipeline_Riemannian = Pipeline(
-    [
-        ("windows", ListTimeSeriesWindowTransformer(
-            window_size = upsampling_freq*15,
-            step_size = upsampling_freq*1
-        )),
-        ("block_kernels", HybridBlocks(block_size=block_size,
-                                       shrinkage=0.01, 
-                                       metrics='cov'
-        )),
-        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
-            n_clusters=4, 
-            n_init = 10))
-    ], verbose = True
-)
+if not grid_search:
+    scores = []
+    if clustering == 'full':
+        results = pipeline(
+                X, y, id=np.nan, session=np.nan, 
+                clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
+                demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
+                plot=plot, window_length=window_length, step_length=step_length, 
+                shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+        # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
+        # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+        # RandscoreTasks, RandScoreSessions, RandScoreIds, nTasks
+        scores.append(
+                ['all', 'all', results[6], results[7], results[8], results[9], results[10],
+                    results[11], results[12], results[13], results[14]]
+            )
+        
+    else:
+        for id in chosen_ids: 
+            if clustering == "session-wise":
+                chosen_sessions = np.unique(sessions[ids == id]) if which_session == 'all' else [which_session]
 
-# ------------------------------------------------------------
-### Fit the models
-pipeline_Riemannian.fit(X)
-print(f"Silhouette Score: {riemannian_silhouette_score(pipeline_Riemannian)}")
-print(f"Calinski-Harabasz Score: {ch_score(pipeline_Riemannian)}")
-
-# # ------------------------------------------------------------
-### Predict labels
-matrices = np.array(pipeline_Riemannian.named_steps["block_kernels"].matrices_)
-classes = pipeline_Riemannian.named_steps["kmeans"].predict(matrices)
-
-# ------------------------------------------------------------
-### PCA and plot
-mean_matrix = mean_riemann(matrices)
-X_tangent = tangent_space(matrices, mean_matrix)
-pca = PCA(n_components=2)
-X_pca = pca.fit_transform(X_tangent)
-
-# Plot
-plt.figure(figsize=(6, 5))
-for label in np.unique(classes): 
-    plt.scatter(X_pca[classes == label, 0], X_pca[classes == label, 1], label=f"Class {label}", alpha=0.8)
-plt.xlabel("PC1")
-plt.xlabel("PC2")
-plt.title("Tangent Space PCA projection")
-plt.legend()
-plt.show()
-
-# ------------------------------------------------------------
-### Grid search
-
-# Define parameters
-params_window_length = [15] # virtual trial length in s
-params_shrinkage = [0, 0.01, 0.1]
-params_kernel = ['cov', 'rbf', 'lwf', 'tyl'] #, 'corr']
-params_n_clusters = sys.argv[1]
-
-# Compute grid search parameters from these inputs
-params_window_size = [x * upsampling_freq for x in params_window_length]
-comb_shrinkage = product(params_shrinkage, repeat = int(n_channels / block_size))
-params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
-comb_kernel = product(params_kernel, repeat = int(n_channels / block_size))
-params_kernel_combinations = [list(x) for x in comb_kernel]
-params_n_clusters = range(3,10)
-
-# Define grid search for GridSearchCV
-#param_grid_hybrid_blocks = {
-#    'windows__window_size': params_window_size,
-#    'block_kernels__shrinkage': params_shrinkage,
-#    'block_kernels__metrics': params_kernel_combinations,
-#    'kmeans__n_clusters': params_n_clusters
-#}
-
-#grid_search_hybrid_blocks = GridSearchCV(pipeline_hybrid_blocks, 
-#                           param_grid_hybrid_blocks, 
-#                           scoring=riemannian_silhouette_score, 
-#                           n_jobs=n_jobs,
-#                           verbose=10,
-#                           error_score="raise")
-
-# execute grid search 
-#TODO: Currently, this does not work because labels and data are not taken 
-# from the same fold. 
-#print("executing grid search")
-#grid_search_hybrid_blocks.fit(X)
-
-# custom grid search
-# We could implement additional scores here, e.g. David-Bouldin index, but this one is based on Euclidean distances. 
-# Another (somewhat more difficult) possibility is a comparison based on Fowlkes-Mallows indices or pair confusion matrices
-scores = []
-i = 0
-for window_size in params_window_size:
-    for shrinkage in params_shrinkage_combinations: 
-        for kernel in params_kernel_combinations: 
-            for n_clusters in params_n_clusters: 
-                i += 1
-                print(f"Iteration {i}, parameters: window length {window_size/upsampling_freq}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
-                pipeline_hybrid_blocks = Pipeline(
-                    [
- #                       ("windows", ListTimeSeriesWindowTransformer(
-#                                       window_size = window_size)),
-                        ("block_kernels", HybridBlocks(block_size=block_size,
-                                        shrinkage=shrinkage, 
-                                        metrics=kernel
-                                        )),
-                        ("kmeans", RiemannianKMeans(n_jobs=n_jobs,
-                                        n_clusters=n_clusters, 
-                                        max_iter=max_iter, 
-                                        n_init = 10,
-                                        ))
-                    ], verbose = True       
-                )
-                try:
-                    pipeline_hybrid_blocks.fit(X)
-                except ValueError as e:
-                    print(f"Skipping due to error: {e}")  # Optional: print the error message
-                    continue
+                for session in chosen_sessions: 
+                    results = pipeline(
+                        X, y, id=id, session=session, 
+                        clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
+                        demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
+                        plot=plot, window_length=window_length, step_length=step_length, 
+                        shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+                    # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
+                    # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                    # RandscoreTasks, RandScoreSessions, RandScoreIds, nTasks
+                    scores.append(
+                        [id, session, 
+                            results[6], results[7], results[8], results[9], results[10],
+                            results[11], results[12], results[13], results[14]]
+                        ) 
+            else: 
+                results = pipeline(
+                    X, y, id=id, session=np.nan, 
+                    clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
+                    demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
+                    plot=plot, window_length=window_length, step_length=step_length, 
+                    shrinkage=shrinkage, metrics=metrics, n_clusters=n_clusters)
+                # Append id, sessions, SilhouetteCoefficient, CalinskiHarabaszScore, 
+                # RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                # RandscoreTasks, RandScoreSessions, RandScoreIds, nTasks
                 scores.append(
-                   [window_size, shrinkage, kernel, n_clusters, 
-                     riemannian_silhouette_score(pipeline_hybrid_blocks),
-                     ch_score(pipeline_hybrid_blocks)])
-scores = pd.DataFrame(scores, columns=['WindowSize', 'Shrinkage', 'Kernel', 'nClusters', 
-                                       'SilhouetteCoefficient', 
-                                       'CalinskiHarabaszScore'])
+                    [id, 'all', 
+                        results[6], results[7], results[8], results[9], results[10],
+                        results[11], results[12], results[13], results[14]]
+                    )
+    scores = pd.DataFrame(scores, columns = [
+        'ID', 'Session', 
+        'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
+        'RandscoreTasks', 'RandScoreSessions', 'RandScoreIds', 'nTasks']
+        ) 
+    matrices, cluster_means, classes, tasks, sessions, ids = results[0], results[1], results[2], results[3], results[4], results[5]
+    results_table = pd.DataFrame(np.stack((classes, tasks, sessions, ids), axis = 1), 
+                                 columns = ['classes', 'tasks', 'sessions', 'ids'])
+      
 
-# save results
-#print("saving results")
-#timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-#scores.to_csv(f"results/grid_search_results_{timestamp}.csv", index=False)
+# ------------------------------------------------------------
+### Run grid search. Do not change this section. 
+
+if grid_search:
+    # ATTENTION: This script currently does not use the hybrid property of HybridBlocks. 
+    # All hyperparameters are set to the same value in each iteration for all blocks. 
+    # The commented-out lines below allow for separate shrinkage parameters and kernels per block.  
+    # That option leads to much longer runtimes and is therefore avoided here. 
+
+    # Compute grid search parameters from inputs
+    comb_shrinkage = product(params_shrinkage, repeat = exp_n_blocks)
+    params_shrinkage_combinations = [list(x) for x in comb_shrinkage]
+    #params_shrinkage_combinations = params_shrinkage
+    comb_kernel = product(params_kernel, repeat = exp_n_blocks)
+    params_kernel_combinations = [list(x) for x in comb_kernel]
+    #params_kernel_combinations = params_kernel
+    plot = 0 # do not plot during grid search
+
+    scores = []
+    i = 0
+    for shrinkage in params_shrinkage_combinations:
+        for kernel in params_kernel_combinations:
+            for n_clusters in params_n_clusters:
+                if clustering == 'full':
+                    i += 1
+                    print(f"Iteration {i}, parameters: shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
+                    try:
+                        results = pipeline(
+                        X, y, id=np.nan, session=np.nan, 
+                        clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
+                        demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
+                        plot=plot, window_length=window_length, step_length=step_length,
+                        shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
+                    except ValueError as e:
+                        print(f"Skipping due to error: {e}")
+                        continue
+                    # Append id, sessions, window length, shrinkage, kernel, number of clusters,
+                    # SilhouetteCoefficient, CalinskiHarabaszScore, RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                    # RandscoreTasks, RandScoreSessions, RandScoreIds, nTasks
+                    scores.append(
+                        ['all', 'all', window_length, shrinkage, kernel, n_clusters, 
+                            results[6], results[7], results[8], results[9], results[10],
+                            results[11], results[12], results[13], results[14]]
+                    )
+                else:
+                    for id in chosen_ids:
+                        if clustering == 'session-wise':
+                            chosen_sessions = np.unique(sessions[ids == id]) if which_session == 'all' else [which_session]
+                            for session in chosen_sessions:
+                                i += 1
+                                print(f"Iteration {i}, parameters: ID {id}, session {session}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
+                                try:
+                                    results = pipeline(
+                                        X, y, id=id, session=session, 
+                                        clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
+                                        demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
+                                        plot=plot, window_length=window_length, step_length=step_length,
+                                        shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
+                                except ValueError as e:
+                                    print(f"Skipping due to error: {e}")  # Optional: print the error message
+                                    continue
+                                except AssertionError as e:
+                                    print(f"Skipping due to error: {e}")  # Optional: print the error message
+                                    continue
+                                # Append id, session, window length, shrinkage, kernel, number of clusters,
+                                # SilhouetteCoefficient, CalinskiHarabaszScore, RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                                # RandscoreTasks, RandScoreSessions, RandScoreIds, nTasks
+                                scores.append(
+                                        [id, session, window_length, shrinkage, kernel, n_clusters, 
+                                        results[6], results[7], results[8], results[9], results[10],
+                                        results[11], results[12], results[13], results[14]]
+                                )
+                        else: 
+                            i += 1
+                            print(f"Iteration {i}, parameters: ID {id}, shrinkage {shrinkage}, kernel {kernel}, n_clusters {n_clusters}")
+                            try:
+                                results = pipeline(
+                                    X, y, id=id, session=np.nan, 
+                                    clustering=clustering, sessions=sessions, ids=ids, blocks=blocks, n_channels=n_channels,
+                                    demean=demean, demeaner_var=demeaner_var, demeaner_method=demeaner_method,
+                                    plot=plot, window_length=window_length, step_length=step_length,
+                                    shrinkage=shrinkage, metrics=kernel, n_clusters=n_clusters)
+                            except ValueError as e:
+                                print(f"Skipping due to error: {e}")  
+                                continue
+                            # Append id, session, window length, shrinkage, kernel, number of clusters,
+                            # SilhouetteCoefficient, CalinskiHarabaszScore, RiemannianVariance, DaviesBouldinIndex, GeodesicDistanceRatio,
+                            # RandscoreTasks, RandScoreSessions, RandScoreIds, nTasks
+                            scores.append(
+                                        [id, 'all', window_length, shrinkage, kernel, n_clusters, 
+                                        results[6], results[7], results[8], results[9], results[10],
+                                        results[11], results[12], results[13], results[14]]
+                            )
+    scores = pd.DataFrame(scores, columns=['ID', 'Session', 'WindowLength', 'Shrinkage', 'Kernel', 'nClusters', 
+                                       'SilhouetteCoefficient', 'CalinskiHarabaszScore', 'RiemannianVariance', 'DaviesBouldinIndex', 'GeodesicDistanceRatio',
+                                       'RandscoreTasks', 'RandScoreSessions', 'RandScoreIds', 'nTasks'])
+
+
+# ------------------------------------------------------------
+### Save results. Do not change this section. 
+print("saving results")
+timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
+outpath = Path(path) / f"{type_of_data}-{n_clusters}"
+if not outpath.is_dir():
+    outpath.mkdir()
+
+scores.to_csv(Path(outpath) / f"parameter-space-scores_{type_of_data}-{n_clusters}_{timestamp}.csv", index=False)
+if not grid_search: 
+    np.save(Path(outpath) / f"matrices_{type_of_data}-{n_clusters}_{timestamp}.npy", matrices)
+    np.save(Path(outpath) / f"cluster-means_{type_of_data}-{n_clusters}_{timestamp}.npy", cluster_means)
+    np.save(Path(outpath) / f"classes_{type_of_data}-{n_clusters}_{timestamp}.npy", classes)
+    results_table.to_csv(Path(outpath) / f"results-table_{type_of_data}-{n_clusters}_{timestamp}.csv", index=False)
+json_object = json.dumps(pipeline_metadata, indent=4)
+with open(Path(outpath) / f"pipeline-description_{timestamp}.json", "w") as outfile: 
+    outfile.write(json_object)
