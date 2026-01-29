@@ -3,7 +3,7 @@
 #**Author:** Luca A. Naudszus
 #**Date:** 6 March 2025
 #**Affiliation:** Social Brain Sciences Lab, ETH Zürich
-#**Email:** luca.naudszus@gess.ethz.ch
+#**Email:** lnaudszus@ethz.ch
 
 # ------------------------------------------------------------
 # Import packages
@@ -23,11 +23,10 @@ from riemannianKMeans import pseudodyads
 
 # ------------------------------------------------------------
 # Set variables
-path = "/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/analysis/data/time-series-features/clustering/fNIRS_prepared"
+path = "data/main"
 
 pseudo_dyads = True # Create pseudo dyads
 session_wise = False # Might lead to memory issues when creating pseudo dyads when running on a standard machine
-ageDPFs = False
 
 too_many_zeros = 100 # number of zeros in time series that is considered conspicuous
 upsampling_freq = 5
@@ -99,11 +98,8 @@ def add_durations(targetID, session_n, in_epoch, duration_epoch, true_duration):
 
 # ------------------------------------------------------------
 # Load data
-if ageDPFs: 
-    inpath = Path(path, "fNIRS_preprocessed_ageDPFs")
-else: 
-    inpath = Path(path, "fNIRS_preprocessed")
-infopath = Path(path, "additional_information")
+inpath = Path(path, "0_fNIRS_preprocessed")
+infopath = Path(path, "1_fNIRS_prepared/additional_information")
 true_dyads = pd.read_csv(Path(infopath, "dyadList.csv")) # list of true dyads
 cutpoints = pd.read_excel(Path(infopath, "cutpoints_videos.xlsx")) # list of task durations from video data
 best_channels = pd.read_csv(Path(infopath, "fNIRS_chs_ROIproximal.csv"))
@@ -407,6 +403,7 @@ for i, row in dyads.iterrows():
 
 # ------------------------------------------------------------
 # Save data
+outpath = Path(path) / "1_fNIRS_prepared"
 for key in list(ts.keys()):
     if key == "one-brain": 
         columns = ["id", "session", "task"]
@@ -414,9 +411,9 @@ for key in list(ts.keys()):
     else: 
         columns = ["id", "isReal", "group", "session", "task"]
         pseudo = "true" if pseudo_dyads else "false"
-    np.savez(Path(path, key, f"ts_{key}_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['channel-wise'])
-    np.savez(Path(path, key, f"ts_{key}_session_fb-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['session-wise'])
+    np.savez(Path(outpath, key, f"timeseries_{key}_freqband-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['channel-wise'])
+    np.savez(Path(outpath, key, f"timeseries_{key}_session_freqband-{which_freq_bands}_pseudo-{pseudo}"), *ts[key]['session-wise'])
     pd.DataFrame(doc[key], 
                  columns=columns).to_csv(
-                     Path(path, key, f"doc_{key}_pseudo-{pseudo}.csv"))
-    np.savez(Path(path, key, f"channels_{key}_pseudo-{pseudo}"), *channels[key])
+                     Path(outpath, key, f"documentation_{key}_pseudo-{pseudo}.csv"))
+    np.savez(Path(outpath, key, f"channels_{key}_pseudo-{pseudo}"), *channels[key])

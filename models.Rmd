@@ -1,6 +1,6 @@
 ---
 title: "Analysis of brain states in real-world social interactions: fit to behavioral structure"
-author: "Luca A. Naudszus"
+author: "Luca A. Naudszus, ETH Zürich, lnaudszus@ethz.ch"
 date: "2025-03-14"
 output: html_document
 ---
@@ -15,13 +15,9 @@ library(lme4)
 library(lmtest)
 library(MASS)
 library(purrr)
-library(reticulate)
 library(tidyverse)
 library(viridis)
 library(here)
-
-np <- import("numpy") # currently necessary for opening centroids, classes, and
-# matrices saved with numpy in Python
 
 theme_set(theme_light()+
             theme(
@@ -38,11 +34,11 @@ theme_set(theme_light()+
 
 # Settings
 ### USER INPUT ###
-type_of_data = "one-brain-3" # "one-brain-3", "one-brain-7", "four-blocks-3", or "four-blocks-7"
+datapath = file.path('data', 'main')
+type_of_data = "four-blocks-7" # "one-brain-3", "one-brain-8", "four-blocks-3", or "four-blocks-7"
 combined = TRUE # in case of one brain data, investigation of single brain states is possible by setting combined to FALSE
-target = "duration" # "occurrence", "coverage", or "duration"
+target = "occurrence" # "occurrence", "coverage", or "duration"
 ### ---------- ###
-
 ```
 
 ## Custom functions
@@ -144,12 +140,7 @@ generate_pattern_matrix <- function(df,
   return(patterns)
 }
 
-# Get the latest file matching the pattern
-latest_file <- function(pattern) {
-  files <- list.files(clustering_path, pattern = pattern, full.names = TRUE)
-  if (length(files) == 0) return(NULL)
-  files[order(files)][[length(files)]]
-}
+
 
 # Create list of contrast expressions for states
 generate_contrast_list <- function(states) {
@@ -180,9 +171,14 @@ generate_contrast_list <- function(states) {
 
 # Factorize and format state labels
 format_state_labels <- function(df, type_of_data) {
-  if (type_of_data %in% c("one-brain-3", "one-brain-5", "one_brain-7")) {
+  if (type_of_data %in% c("one-brain-3", "one-brain-8")) {
     df <- df %>%
-      mutate(state = factor(state))
+      mutate(state = factor(case_when(
+        state %in% c("1_1", "2_2", "3_3", "4_4", "5_5", "6_6", "7_7", "8_8") ~ 1,
+        TRUE ~ 0
+      ))) %>%
+    group_by(dyad, dyad_type, group, session, task, state) %>%
+    summarize(target = sum(target))
     
   } else if (type_of_data == "four-blocks-7") {
     df <- df %>%
@@ -200,9 +196,9 @@ format_state_labels <- function(df, type_of_data) {
   } else if (type_of_data == "four-blocks-3") {
     df <- df %>%
       mutate(state = factor(case_when(
-        state == 1 ~ "B",
-        state == 2 ~ "A",
-        state == 3 ~ "C",
+        state == 1 ~ "II",
+        state == 2 ~ "III",
+        state == 3 ~ "I",
         TRUE ~ "None"
       )))
   }
@@ -210,6 +206,7 @@ format_state_labels <- function(df, type_of_data) {
   return(df)
 }
 ```
+
 ## Load data
 
 ```{r load_data}
@@ -231,7 +228,7 @@ if (type_of_data %in% c("four-blocks-3", "four-blocks-7")) {
 }
 
 # load data
-datapath = here('data', 'time-series-features', type_of_data)
+datapath = here(datapath, '3_time-series-metrics')
 fn_pattern <- paste0("feature-table_", type_of_data, suffix)
 if (!dir.exists(outpath)) {
   dir.create(outpath, recursive = TRUE)
@@ -250,108 +247,19 @@ df <- df %>%
          dyad = factor(dyad)
         ) %>%
   rename(target = eval(target)) %>%
-  mutate(target = round(target))
+  mutate(target = round(target)) %>%
+  mutate(group = case_when(
+    dyad_type == "Pseudo" & as.numeric(substr(as.character(df$dyad), 5, 8)) < 300 ~ "Same gen",
+    dyad_type == "Pseudo" & as.numeric(substr(as.character(df$dyad), 5, 8)) > 300 ~ "Intergen",
+    TRUE ~ group)
+  )
 
-# rename states in case of two-brain states
+# rename states 
 df <- format_state_labels(df, type_of_data)
 ```
 
-# Plot brain states
 
-```{r brainstates, message=FALSE}
-clustering_path = here('data', 'time-series-features', 'clustering', 
-                       type_of_data)
-fn_centroids <- latest_file(paste0("cluster-means_", type_of_data, "_"))
-centroids <- np$load(fn_centroids)
-fn_classes <- latest_file(paste0("classes_", type_of_data, "_"))
-classes <- np$load(fn_classes)
-fn_matrices <- latest_file(paste0("matrices_", type_of_data, "_"))
-matrices <- np$load(fn_matrices)
-
-if (type_of_data %in% c("one-brain-3", "one-brain-5", "one-brain-8")) {
-  channels <- c("lIFG", "lTPJ", "rIFG", "rTPJ")
-} else {
-  channels <- c("lIFG1", "lTPJ1", "rIFG1", "rTPJ1",
-                "lIFG2", "lTPJ2", "rIFG2", "rTPJ2")
-}
-exp_block_size <- length(channels)
-
-# ------------------------------------------------------------
-# Preprocess centroids
-centroids_hbo <- list()
-centroids_hbr <- list()
-
-for (i in 1:dim(centroids)[1]) {
-  c_hbo <- centroids[i, 1:exp_block_size, 1:exp_block_size]
-  c_hbr <- centroids[i, (exp_block_size + 1):(2 * exp_block_size), 
-                     (exp_block_size + 1):(2 * exp_block_size)]
-  
-  tril_hbo <- c_hbo
-  tril_hbo[upper.tri(tril_hbo, diag = TRUE)] <- NA
-  centroids_hbo[[i]] <- tril_hbo
-  
-  tril_hbr <- c_hbr
-  tril_hbr[upper.tri(tril_hbr, diag = TRUE)] <- NA
-  centroids_hbr[[i]] <- tril_hbr
-}
-
-centroids_list <- list(centroids_hbo, centroids_hbr)
-chromophores <- c("HbO", "HbR")
-
-df.mat <- map2_df(centroids_list, 1:2, function(mat_list, chromophore) {
-  map2_df(mat_list, 1:length(centroids_hbo), function(mat, state) {
-    colnames(mat) <- paste0("V", 1:ncol(mat))
-    
-    mat_df <- as_tibble(mat) %>%
-      mutate(row = row_number()) %>%
-      pivot_longer(-row, names_to = "col", values_to = "value") %>%
-      mutate(
-        col_index = as.integer(str_remove(col, "V")),
-        col = channels[col_index],
-        row = channels[row],
-        state = state,
-        chromophore = case_when(
-          chromophore == 1 ~ "HbO",
-          chromophore == 2 ~ "HbR"
-        )
-      )
-    mat_df$row <- factor(mat_df$row, levels = channels)
-    mat_df$col <- factor(mat_df$col, levels = channels)
-    mat_df
-  })
-})
-
-# rename states
-df.mat <- format_state_labels(df.mat, type_of_data)
-
-# plot states as heatmaps
-
-### USER INPUT ###
-set_chromophore = "HbR" # set to "HbO" or "HbR"
-### ---------- ###
-
-ggplot(df.mat[df.mat$chromophore == set_chromophore,], 
-       aes(x = col, y = row, fill = value)) +
-  geom_tile() +
-  geom_text(aes(label = round(value, 3)), color = "blue") +
-  scale_fill_gradient(low = "white", high = "red", breaks = c(0, 0.6),
-                      labels = c("lower", "higher"), 
-                      name = "Kernel estimate", guide = "none") +
-  scale_x_discrete(labels = channels, position = "top", 
-                   drop = FALSE, name = NULL) +
-  scale_y_discrete(labels = channels, drop = FALSE, name = NULL) +
-  facet_wrap(~ state, ncol = 4)
-ggsave(file.path(here("data", "time-series-features", "clustering", 
-                      type_of_data, paste0(type_of_data, "_centroids")),
-                 paste0("centroids_", type_of_data, "_",
-                       set_chromophore, ".png")), 
-       width = 16, height = 5, dpi = 400)
-```
-
-
-# Sessions combined
-
-### Model
+### First-step model
 
 ```{r fit, echo = FALSE}
 # define model
@@ -381,7 +289,7 @@ if (lrtest$`Pr(>Chisq)`[2] < .05) {
 anova(fit)
 ```
 
-### Contrasts
+### Contrasts (sessions combined)
 
 ```{r contrasts, message=FALSE}
 # Get all estimated means in data frame
@@ -405,8 +313,9 @@ df.contrasts1 <- contrast(emm1, method = method_list) %>%
 df.contrasts1$state <- list_states
 df.contrasts1$task <- list_tasks
 df.contrasts1$group <- list_groups
+df.contrasts1$p.adj <- p.adjust(df.contrasts1$p.value, method = "fdr")
 df.contrasts1 <- df.contrasts1 %>%
-  mutate(sig = p.value < .05,
+  mutate(sig = p.adj < .05,
          state = factor(state), 
          task = factor(task),
          group = factor(group)
@@ -454,6 +363,8 @@ ggplot() +
 ```
 
 
+# Second-step model
+
 ```{r model2, message = FALSE}
 # Selected states are based on previous analyses of the data and refer to 
 # those states which displayed a significant difference between real and pseudo
@@ -498,6 +409,7 @@ anova(fit2)
 ### ---------- ###
 ```
 
+### Contrasts (second-step models)
 
 ```{r carryforward1, message=FALSE}
 if (error_flag) { 
@@ -532,8 +444,8 @@ df.contrasts2$contrast <- rep(c("Tog-Alo", "Tog-Alo Intergen", "Tog-Alo Same gen
                               times = length(selected_states))
 df.contrasts2 <- df.contrasts2 %>%
   mutate(sig = factor(p.value < .05, levels=c(T, F)),
-         state = factor(state)
-         )
+         state = factor(state),
+  )
 
 # Plot dot map
 ggplot() + 
@@ -556,10 +468,107 @@ ggplot() +
   facet_grid(~state)
 ```
 
+# Bar plot for one state
+
+```{r bar plot}
+
+# Plot bar plot
+current_state = "G"
+
+df.emm2s <- df.emm2 %>%
+#  filter(state == current_state) %>%
+  mutate(x = interaction(group, task, lex.order = TRUE))
+
+targets = c("occurrence", "duration", "coverage")
+color_vec = c("#4C72B0", "#DD8452", "#55A868")
+col_now <- color_vec[which(targets == target)]
+p <- ggplot(df.emm2s,
+  aes(x = x, y = var, alpha = task)) + 
+  geom_rect(xmin = 0.5, xmax = 2.5, ymin = -Inf, ymax = Inf,
+  fill = "grey90", alpha = 0.6, inherit.aes = FALSE) + 
+  geom_col(width = 0.7, fill = col_now, colour = "black") +
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL),
+    position = position_dodge(width = 0.8), width = 0.15, linewidth = 0.6, colour = "black", alpha = 1,
+  ) +
+  scale_x_discrete(labels = function(z) sub("^.*\\.", "", z)) +
+  scale_alpha_manual(values = c("Alone" = 0.2, "Together" = 0.8)) +
+  labs(x = "",
+    y = sprintf("Estimated mean %s", target)) + 
+  annotate("text", x = 1.5, y = Inf, label = "Intergen", 
+           vjust = 1.2, size = 8.5, fontface = "bold") +
+  annotate("text", x = 3.5, y = Inf, label = "Same gen", 
+         vjust = 1.2, size = 8.5, fontface = "bold") + 
+  theme_classic(base_size = 13) +
+  theme(legend.position = "None",
+    axis.text.x = element_text(colour = "black", size = 24, angle = 45, vjust = 0.6),
+    axis.text.y = element_text(colour = "black", size = 24),
+    axis.title = element_text(face = "bold", size = 24),
+    strip.background = element_rect(fill = "grey95", colour = "black", linewidth = 0.6),
+    strip.text = element_text(size = 16, face = "bold")) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.12)))
+
+if (current_state == "G" & target == "duration") {
+  sig <- tibble::tribble(
+    ~x1, ~x2, ~y, ~label,
+    "Intergen.Together", "Same gen.Together", 13, "**"
+  )
+} else if (current_state == "B" & target == "occurrence") {
+  sig <- tibble::tribble(
+    ~x1, ~x2, ~y, ~label
+  )
+} else if (current_state == "D" & target == "occurrence") {
+  sig <- tibble::tribble(
+    ~x1, ~x2, ~y, ~label
+  ) 
+} else if (current_state == "B" & target == "coverage") {
+  sig <- tibble::tribble(
+    ~x1, ~x2, ~y, ~label
+  )
+} else if (current_state == "D" & target == "coverage") {
+  sig <- tibble::tribble(
+    ~x1, ~x2, ~y, ~label
+  ) 
+} else if (current_state == "G" & target == "coverage") {
+  sig <- tibble::tribble(
+    ~x1, ~x2, ~y, ~label
+  ) 
+}
+p = p + geom_segment(
+    data = sig,
+    aes(x = x1, xend = x2, y = y, yend = y),
+    inherit.aes = FALSE,
+    linewidth = 0.7,
+    colour = "black") + 
+  geom_segment(
+    data = sig,
+    aes(x = x1, xend = x1, y = y, yend = y - 0.01),
+    inherit.aes = FALSE,
+    linewidth = 0.7,
+    colour = "black") +
+  geom_segment(
+    data = sig,
+    aes(x = x2, xend = x2, y = y, yend = y - 0.01),
+    inherit.aes = FALSE,
+    linewidth = 0.7,
+    colour = "black") +
+  geom_text(
+    data = sig,
+    aes(x = (as.numeric(factor(x1, levels = levels(df.emm2s$x))) +
+             as.numeric(factor(x2, levels = levels(df.emm2s$x)))) / 2,
+        y = y + 0.01,
+        label = label),
+    inherit.aes = FALSE,
+    size = 10)
+
+p
+```
+
+# Plot estimated means for one state
+
 ```{r plot_one_state-means, message=FALSE}
 ### USER INPUT ###
 # This section can plot the estimated means for one specific state. 
-set_state = "1_1"
+set_state = "G"
 ### ---------- ###
 
 df_onestate <- df.emm1[df.emm1$state == set_state & df.emm1$dyad_type == "Real",]
@@ -575,6 +584,8 @@ ggsave(file.path(here(outpath, "sessions-combined", target),
                  paste0(set_state, "_tiles.png")), 
        width = 5, height = 5)
 ```
+
+# Plot contrasts for one state
 
 ```{r plot_one_state-contrasts, message=FALSE}
 ### USER INPUT ###
@@ -616,9 +627,8 @@ ggsave(file.path(here(outpath, "sessions-combined", target),
        width = 4, height = 4)
 ```
 
-# Across sessions
 
-### Contrasts
+### Contrasts across sessions (slope)
 
 ```{r contrasts2, message=FALSE}
 # Get all estimated means in data frame
@@ -629,6 +639,7 @@ df.emm3 <- emm3 %>% as_tibble()
 
 # Contrasting pseudo vs. real
 patterns <- generate_pattern_matrix(df.emm3)
+states <- levels(df$state)
 method_list = generate_contrast_list(states)
 list_states = rep(states, each=4)
 list_tasks = rep(c("Alone", "Alone", "Together", "Together"), 
@@ -687,6 +698,8 @@ ggplot() +
 
 ```
 
+# Third-step model
+
 ```{r model3, message=FALSE}
 # Selected states are based on previous analyses of the data and refer to 
 # those states which displayed a significant difference between real and pseudo
@@ -729,6 +742,7 @@ if (lrtest3$`Pr(>Chisq)`[2] < .05) {
 anova(fit3)
 ```
 
+# Contrasts in the third-step model (slope across sessions)
 
 ```{r carryforward2, message=FALSE}
 # Carrying contrasts forward

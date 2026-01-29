@@ -3,7 +3,7 @@
 #**Author:** Luca A. Naudszus
 #**Date:** 20 February 2025
 #**Affiliation:** Social Brain Sciences Lab, ETH Zürich
-#**Email:** luca.naudszus@gess.ethz.ch
+#**Email:** lnaudszus@ethz.ch
 
 # ------------------------------------------------------------
 # Import packages and custom functions
@@ -38,13 +38,14 @@ from riemannianKMeans import (
 
 # ------------------------------------------------------------
 # Set path
-path = '/Users/lucanaudszus/Library/CloudStorage/OneDrive-Personal/Translational Neuroscience/9 Master Thesis/analysis/data/time-series-features/clustering'
+path = "data/main"
+outpath = Path(path) / '2_clustering'
 
 # ------------------------------------------------------------
 # Set arguments. Change only variables in this section of the script. 
 
 # which type of data are we interested in?
-type_of_data = "one-brain"
+type_of_data = "four-blocks"
 # one-brain, two-blocks, four-blocks: channel-wise z-scoring
 # one-brain_session, etc.: channel- and session-wise z-scoring
 exp_block_size = 4
@@ -91,7 +92,7 @@ plot = True
 # hyperparameters (overridden in case of grid search)
 shrinkage = 0.1 # shrinkage value
 metrics = 'rbf' # kernel function
-n_clusters = 5 # number of clusters for k-means
+n_clusters = 7 # number of clusters for k-means
 
 # parameter space for grid search
 params_shrinkage = [0, 0.01 ,0.1]
@@ -326,15 +327,15 @@ else:
     demeaner_method = "False"
 
 # Make folder
-datapath = Path(path) / "fNIRS_prepared" / type_of_data
+datapath = Path(path) / "fNIRS_prepared" 
 
 # Load the dataset
 pseudo = "true" if pseudo_dyads else "false"
-npz_data = np.load(Path(datapath) / f"ts_{type_of_data}_fb-{which_freq_bands}_pseudo-{pseudo}.npz")
+npz_data = np.load(Path(datapath) / f"timeseries_{type_of_data}_freqband-{which_freq_bands}_pseudo-{pseudo}.npz")
 X = []
 for array in list(npz_data.files):
     X.append(npz_data[array])
-doc = pd.read_csv(Path(datapath) / f"doc_{type_of_data}_pseudo-{pseudo}.csv", index_col = 0)
+doc = pd.read_csv(Path(datapath) / f"documentation_{type_of_data}_pseudo-{pseudo}.csv", index_col = 0)
 ids = np.array(doc['id'])
 sessions = np.array(doc['session'])
 conditions = [
@@ -572,7 +573,6 @@ if grid_search:
 print("saving results")
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
-outpath = Path(path) / f"{type_of_data}-{n_clusters}"
 if not outpath.is_dir():
     outpath.mkdir()
 
