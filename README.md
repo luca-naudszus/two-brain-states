@@ -1,5 +1,5 @@
-This repository contains the data and analysis code for [redacted for peer review]. 
-The analyses reproduce all results reported in the paper. 
+This repository contains the data and analysis code for the preprint "Two-brain states during collaborative drawing interactions identified using fNIRS dynamic functional connectivity" [Authors redacted for peer-review]. 
+The analyses reproduce all results reported in the manuscript. 
 
 ### Overview
 Data is provided for main and supplementary analyses. 
@@ -41,6 +41,8 @@ in the following abbreviated by the asterisk \*.
   detailing the kernel matrices. 
   
 `metrics.py` calculates brain state metrics on the backfit time series. It outputs into one metrics table. 
+
+`models.RMD` contains code for the statistical analyses of the resulting metrics and for a few plots. 
   
 # Supplementary data
 We provide data clustered into three brain states, as detailed in the supplement, in the folder `supplementary/two-brain_clusters-3`. 
